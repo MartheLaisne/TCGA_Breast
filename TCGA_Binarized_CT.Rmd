@@ -1,0 +1,1318 @@
+---
+title: "TCGA_Binarized_CT"
+output: html_notebook
+---
+#Introduction
+
+Ce notebook explique comment a été réalisé l'analyse de l'expression des CT, dans les différentes tumeurs : 
+==> Etape 1, binarisation 
+
+##Paths
+```{r}
+pathData = "C:/Users/marth/Desktop/These_Marthe/1_Bioinfo/180801_TCGANormalized_DESeq"
+pathRes = "C:/Users/marth/Desktop/These_Marthe/1_Bioinfo/181115_TCGApostSeminaire/Results_DESEq2"
+```
+
+##libariries
+```{r}
+#library(TCGAbiolinks)
+
+library(DESeq2)
+
+library(psych)
+
+library(ggplot2)
+library(gridExtra)
+library(ComplexHeatmap)
+library(circlize)
+
+library(ggrepel)
+```
+
+##Données
+Les données d'expression normalisées sur les 4 types tumoraux + tissus normaux
+```{r}
+load(paste(pathData, "WS_All4_NormalizedDataOnly.Rdata", sep="/"))
+
+
+TSPS=read.table(file="C:/Users/marth/Desktop/These_Marthe/1_Bioinfo/documents/Data_TSPS_fromRousseau.txt", h=T, sep="\t")
+CT_Wang=read.table(file="C:/Users/marth/Desktop/These_Marthe/1_Bioinfo/documents/CT_list_Wang.txt", h=T, sep="\t", dec=",")
+CT_Database=read.table(file="C:/Users/marth/Desktop/These_Marthe/1_Bioinfo/documents/data_CTA_list_from_CT_database.txt", h=T, sep="\t", dec=",")
+#réunion des trois listes
+CT=data.frame(Description=c(as.character(TSPS$Gene_Symbol),
+                            as.character(CT_Wang$Description),
+                            as.character(CT_Database$Family_member)))
+
+CT=CT$Description[-which(duplicated(CT$Description)==TRUE)]
+CT=data.frame(Description=CT)
+```
+
+```{r}
+#coldata_total = rbind(data.frame(coldata_luad), as.data.frame(coldata_lusc),
+                    #  as.data.frame(coldata_crc), as.data.frame(coldata_breast))
+
+```
+##Labels
+```{r}
+#On récupère les tissus normaux
+
+Norm_LUAD=c(which(coldata_luad$gdc_cases.samples.sample_type=="Solid Tissue Normal"&
+                        coldata_luad$gdc_cases.project.project_id=="TCGA-LUAD")) 
+Norm_LUSC=c(which(coldata_lusc$gdc_cases.samples.sample_type=="Solid Tissue Normal"&
+                        coldata_lusc$gdc_cases.project.project_id=="TCGA-LUSC"))
+Norm_COAD=c(which(coldata_crc$gdc_cases.samples.sample_type=="Solid Tissue Normal"&
+                        coldata_crc$gdc_cases.project.project_id=="TCGA-COAD"))
+Norm_BRCA=c(which(coldata_breast$gdc_cases.samples.sample_type=="Solid Tissue Normal"&
+                        coldata_breast$gdc_cases.project.project_id=="TCGA-BRCA"))
+
+#Et les tumeurs
+Tum_LUAD=c(which(coldata_luad$gdc_cases.samples.sample_type!="Solid Tissue Normal"&
+                       coldata_luad$gdc_cases.project.project_id=="TCGA-LUAD"))
+Tum_LUSC=c(which(coldata_lusc$gdc_cases.samples.sample_type!="Solid Tissue Normal"&
+                       coldata_lusc$gdc_cases.project.project_id=="TCGA-LUSC"))
+Tum_COAD=c(which(coldata_crc$gdc_cases.samples.sample_type!="Solid Tissue Normal"&
+                       coldata_crc$gdc_cases.project.project_id=="TCGA-COAD"))
+Tum_BRCA=c(which(coldata_breast$gdc_cases.samples.sample_type!="Solid Tissue Normal"&
+                       coldata_breast$gdc_cases.project.project_id=="TCGA-BRCA"))
+
+
+#On récupère les TS et les Tissus
+CT_ENSEMBL=rowdata_breast$gene_id[which(is.element(unstrsplit(rowdata_breast$symbol), CT$Description)==TRUE)]
+length(CT_ENSEMBL)
+
+
+index_CT_breast=c(which(is.element(rownames(counts_breast), CT_ENSEMBL)==TRUE))
+length(index_CT_breast)
+
+index_CT_luad=c(which(is.element(rownames(counts_luad), CT_ENSEMBL)==TRUE))
+length(index_CT_luad)
+
+index_CT_lusc=c(which(is.element(rownames(counts_lusc), CT_ENSEMBL)==TRUE))
+length(index_CT_lusc)
+
+index_CT_crc=c(which(is.element(rownames(counts_crc), CT_ENSEMBL)==TRUE))
+length(index_CT_crc)
+```
+##Function
+```{r}
+Ma_fonction_MEAN3SD=function(X) {
+  mean(X, na.rm=T)+3*sd(X, na.rm=T)
+}
+Ma_fonction_mean=function(X) {
+  mean(X, na.rm=T)
+}
+Ma_fonction_SD=function(X) {
+  sd(X, na.rm=T)
+}
+Ma_functionlog2=function(X) {
+  X=log2(1+X)
+}
+```
+
+
+
+#Density
+##SEIN
+```{r}
+A="MAGEA1"
+unstrsplit(rowdata_breast$symbol)[grep(A,unstrsplit(rowdata_breast$symbol))] #MageA1 C'est le 3e
+
+id=grep(A,unstrsplit(rowdata_breast$symbol))[3]
+
+#on construit le tableau contenant la valeur d'expression du gene A & les labels, ici pour le sein
+data=data.frame(exp=t(counts_breast[id,]),
+                label=coldata_breast$gdc_cases.samples.sample_type)
+
+head(data)
+
+colnames(data)=c("exp", "label")
+
+#Scale
+data$exp_log2=log2(1+data$exp)
+
+#renommer les labels: on groupe ensemble toutes le tumeurs (primaires, récu et méta)
+data$label[which(data$label=="Metastatic")]="Primary Tumor"
+data$label[which(data$label=="Recurrent Tumor")]="Primary Tumor"
+data$label=relevel(data$label,ref="Solid Tissue Normal")
+
+
+listMean=mean(subset(data, label=="Solid Tissue Normal")$exp_log2)
+listSD = listMean + 3*sd(subset(data, label=="Solid Tissue Normal")$exp_log2)
+
+
+listMean_tum=mean(subset(data, label!="Solid Tissue Normal")$exp_log2)
+listSD_tum = listMean + 3*sd(subset(data, label!="Solid Tissue Normal")$exp_log2)
+            
+            
+
+
+P1=ggplot(data=subset(data, label=="Solid Tissue Normal"), 
+         aes(x=exp, fill=label))+
+
+    geom_density(fill="goldenrod2", color="goldenrod2", alpha=0.5, size=1.5)+
+  
+    geom_vline(xintercept=listMean,
+              size=2, color="goldenrod2")+
+    geom_vline(xintercept=listSD,
+              linetype="dashed", size=2, color="goldenrod2")+
+  
+  facet_grid(label ~.)+
+  scale_fill_manual(values=c("white", "grey30"))+
+  scale_x_continuous(limits=c(min(data$exp_log2),c(max(data$exp_log2)+1)))+
+  
+  labs(title=paste(A), y="Density",x=" ",cex=14)+
+  theme_classic()+ 
+ theme(plot.title = element_text(size = 14, face = "bold",hjust = 0.5),
+              text=element_text(),
+              axis.title = element_text(face="bold"),
+              axis.text.x=element_text(angle=45, hjust=1,colour="black", size = 12),
+              axis.text.y=element_text(colour="black", size = 12))+ 
+  guides(fill=FALSE)
+
+P2=ggplot(data=subset(data, label!="Solid Tissue Normal"), 
+         aes(x=exp, fill=label))+
+    geom_density(fill="black", color="black", alpha=0.5, size=1.5)+
+  
+    geom_vline(xintercept=listMean,
+              size=2, color="goldenrod2")+
+    geom_vline(xintercept=listSD,
+              linetype="dashed", size=2, color="goldenrod2")+
+    geom_vline(xintercept=listMean_tum,
+              size=1, color="grey30")+
+    geom_vline(xintercept=listSD_tum,
+              linetype="dashed", size=1, color="grey30")+
+  
+  facet_grid(label ~.)+
+  scale_fill_manual(values=c("white", "grey30"))+
+  scale_x_continuous(limits=c(min(data$exp_log2),c(1+max(data$exp_log2))))+
+  labs(title=NULL, y="Density",x="LOG2 Normalized Counts",cex=14)+
+  theme_classic()+ 
+ theme(plot.title = element_text(NULL),
+              text=element_text(),
+              axis.title = element_text(face="bold"),
+              axis.text.x=element_text(angle=45, hjust=1,colour="black", size = 12),
+              axis.text.y=element_text(colour="black", size = 12))+ 
+  guides(fill=FALSE)
+g=grid.arrange(P1, P2,
+             ncol=1, nrow=2)
+
+ggsave(paste(pathRes,"/Exp",A, "_BREAST_DESeq2.eps", sep=""), device=cairo_ps, g)
+```
+
+##CRC
+```{r}
+A="MAGEA1"
+unstrsplit(rowdata_crc$symbol)[grep(A,unstrsplit(rowdata_crc$symbol))] #MageA1 C'est le 3e
+
+id=grep(A,unstrsplit(rowdata_crc$symbol))[1]
+
+#on construit le tableau contenant la valeur d'expression du gene A & les labels, ici pour le sein
+data=data.frame(exp=t(counts_crc[id,]),
+                label=coldata_crc$gdc_cases.samples.sample_type)
+
+head(data)
+
+colnames(data)=c("exp", "label")
+
+#Scale
+data$exp_log2=log2(1+data$exp)
+
+#renommer les labels: on groupe ensemble toutes le tumeurs (primaires, récu et méta)
+data$label[which(data$label=="Metastatic")]="Primary Tumor"
+data$label[which(data$label=="Recurrent Tumor")]="Primary Tumor"
+data$label=relevel(data$label,ref="Solid Tissue Normal")
+
+
+listMean=mean(subset(data, label=="Solid Tissue Normal")$exp_log2)
+listSD = listMean + 3*sd(subset(data, label=="Solid Tissue Normal")$exp_log2)
+
+
+listMean_tum=mean(subset(data, label!="Solid Tissue Normal")$exp_log2)
+listSD_tum = listMean + 3*sd(subset(data, label!="Solid Tissue Normal")$exp_log2)
+            
+            
+
+
+P1=ggplot(data=subset(data, label=="Solid Tissue Normal"), 
+         aes(x=exp_log2, fill=label))+
+
+    geom_density(fill="goldenrod2", color="goldenrod2", alpha=0.5, size=1.5)+
+  
+    geom_vline(xintercept=listMean,
+              size=2, color="goldenrod2")+
+    geom_vline(xintercept=listSD,
+              linetype="dashed", size=2, color="goldenrod2")+
+  
+  facet_grid(label ~.)+
+  scale_fill_manual(values=c("white", "grey30"))+
+  scale_x_continuous(limits=c(min(data$exp_log2),c(max(data$exp_log2)+1)))+
+  
+  labs(title=paste(A), y="Density",x=" ",cex=14)+
+  theme_classic()+ 
+ theme(plot.title = element_text(size = 14, face = "bold",hjust = 0.5),
+              text=element_text(),
+              axis.title = element_text(face="bold"),
+              axis.text.x=element_text(angle=45, hjust=1,colour="black", size = 12),
+              axis.text.y=element_text(colour="black", size = 12))+ 
+  guides(fill=FALSE)
+
+P2=ggplot(data=subset(data, label!="Solid Tissue Normal"), 
+         aes(x=exp_log2, fill=label))+
+    geom_density(fill="black", color="black", alpha=0.5, size=1.5)+
+  
+    geom_vline(xintercept=listMean,
+              size=2, color="goldenrod2")+
+    geom_vline(xintercept=listSD,
+              linetype="dashed", size=2, color="goldenrod2")+
+    geom_vline(xintercept=listMean_tum,
+              size=1, color="grey30")+
+    geom_vline(xintercept=listSD_tum,
+              linetype="dashed", size=1, color="grey30")+
+  
+  facet_grid(label ~.)+
+  scale_fill_manual(values=c("white", "grey30"))+
+  scale_x_continuous(limits=c(min(data$exp_log2),c(1+max(data$exp_log2))))+
+  labs(title=NULL, y="Density",x="LOG2 Normalized Counts",cex=14)+
+  theme_classic()+ 
+ theme(plot.title = element_text(NULL),
+              text=element_text(),
+              axis.title = element_text(face="bold"),
+              axis.text.x=element_text(angle=45, hjust=1,colour="black", size = 12),
+              axis.text.y=element_text(colour="black", size = 12))+ 
+  guides(fill=FALSE)
+g=grid.arrange(P1, P2,
+             ncol=1, nrow=2)
+
+ggsave(paste(pathRes,"/Exp",A, "_CRC_DESeq2.eps", sep=""), device=cairo_ps, g)
+```
+
+##LUAD
+```{r}
+A="MAGEA1"
+unstrsplit(rowdata_luad$symbol)[grep(A,unstrsplit(rowdata_luad$symbol))] #MageA1 C'est le 3e
+
+id=grep(A,unstrsplit(rowdata_luad$symbol))[3]
+
+#on construit le tableau contenant la valeur d'expression du gene A & les labels, ici pour le sein
+data=data.frame(exp=t(counts_luad[id,]),
+                label=coldata_luad$gdc_cases.samples.sample_type)
+
+head(data)
+
+colnames(data)=c("exp", "label")
+
+#Scale
+data$exp_log2=log2(1+data$exp)
+
+#renommer les labels: on groupe ensemble toutes le tumeurs (primaires, récu et méta)
+data$label[which(data$label=="Metastatic")]="Primary Tumor"
+data$label[which(data$label=="Recurrent Tumor")]="Primary Tumor"
+data$label=relevel(data$label,ref="Solid Tissue Normal")
+
+
+listMean=mean(subset(data, label=="Solid Tissue Normal")$exp_log2)
+listSD = listMean + 3*sd(subset(data, label=="Solid Tissue Normal")$exp_log2)
+
+
+listMean_tum=mean(subset(data, label!="Solid Tissue Normal")$exp_log2)
+listSD_tum = listMean + 3*sd(subset(data, label!="Solid Tissue Normal")$exp_log2)
+            
+            
+
+
+P1=ggplot(data=subset(data, label=="Solid Tissue Normal"), 
+         aes(x=exp_log2, fill=label))+
+
+    geom_density(fill="goldenrod2", color="goldenrod2", alpha=0.5, size=1.5)+
+  
+    geom_vline(xintercept=listMean,
+              size=2, color="goldenrod2")+
+    geom_vline(xintercept=listSD,
+              linetype="dashed", size=2, color="goldenrod2")+
+  
+  facet_grid(label ~.)+
+  scale_fill_manual(values=c("white", "grey30"))+
+  scale_x_continuous(limits=c(min(data$exp_log2),c(max(data$exp_log2)+1)))+
+  
+  labs(title=paste(A), y="Density",x=" ",cex=14)+
+  theme_classic()+ 
+ theme(plot.title = element_text(size = 14, face = "bold",hjust = 0.5),
+              text=element_text(),
+              axis.title = element_text(face="bold"),
+              axis.text.x=element_text(angle=45, hjust=1,colour="black", size = 12),
+              axis.text.y=element_text(colour="black", size = 12))+ 
+  guides(fill=FALSE)
+
+P2=ggplot(data=subset(data, label!="Solid Tissue Normal"), 
+         aes(x=exp_log2, fill=label))+
+    geom_density(fill="black", color="black", alpha=0.5, size=1.5)+
+  
+    geom_vline(xintercept=listMean,
+              size=2, color="goldenrod2")+
+    geom_vline(xintercept=listSD,
+              linetype="dashed", size=2, color="goldenrod2")+
+    geom_vline(xintercept=listMean_tum,
+              size=1, color="grey30")+
+    geom_vline(xintercept=listSD_tum,
+              linetype="dashed", size=1, color="grey30")+
+  
+  facet_grid(label ~.)+
+  scale_fill_manual(values=c("white", "grey30"))+
+  scale_x_continuous(limits=c(min(data$exp_log2),c(1+max(data$exp_log2))))+
+  labs(title=NULL, y="Density",x="LOG2 Normalized Counts",cex=14)+
+  theme_classic()+ 
+ theme(plot.title = element_text(NULL),
+              text=element_text(),
+              axis.title = element_text(face="bold"),
+              axis.text.x=element_text(angle=45, hjust=1,colour="black", size = 12),
+              axis.text.y=element_text(colour="black", size = 12))+ 
+  guides(fill=FALSE)
+g=grid.arrange(P1, P2,
+             ncol=1, nrow=2)
+
+ggsave(paste(pathRes,"/Exp",A, "_LUAD_DESeq2.eps", sep=""), device=cairo_ps, g)
+```
+
+##LUSC
+```{r}
+A="MAGEA1"
+unstrsplit(rowdata_lusc$symbol)[grep(A,unstrsplit(rowdata_lusc$symbol))] #MageA1 C'est le 3e
+
+id=grep(A,unstrsplit(rowdata_lusc$symbol))[3]
+
+#on construit le tableau contenant la valeur d'expression du gene A & les labels, ici pour le sein
+data=data.frame(exp=t(counts_lusc[id,]),
+                label=coldata_lusc$gdc_cases.samples.sample_type)
+
+head(data)
+
+colnames(data)=c("exp", "label")
+
+#Scale
+data$exp_log2=log2(1+data$exp)
+
+#renommer les labels: on groupe ensemble toutes le tumeurs (primaires, récu et méta)
+data$label[which(data$label=="Metastatic")]="Primary Tumor"
+data$label[which(data$label=="Recurrent Tumor")]="Primary Tumor"
+data$label=relevel(data$label,ref="Solid Tissue Normal")
+
+
+listMean=mean(subset(data, label=="Solid Tissue Normal")$exp_log2)
+listSD = listMean + 3*sd(subset(data, label=="Solid Tissue Normal")$exp_log2)
+
+
+listMean_tum=mean(subset(data, label!="Solid Tissue Normal")$exp_log2)
+listSD_tum = listMean + 3*sd(subset(data, label!="Solid Tissue Normal")$exp_log2)
+            
+            
+
+
+P1=ggplot(data=subset(data, label=="Solid Tissue Normal"), 
+         aes(x=exp_log2, fill=label))+
+
+    geom_density(fill="goldenrod2", color="goldenrod2", alpha=0.5, size=1.5)+
+  
+    geom_vline(xintercept=listMean,
+              size=2, color="goldenrod2")+
+    geom_vline(xintercept=listSD,
+              linetype="dashed", size=2, color="goldenrod2")+
+  
+  facet_grid(label ~.)+
+  scale_fill_manual(values=c("white", "grey30"))+
+  scale_x_continuous(limits=c(min(data$exp_log2),c(max(data$exp_log2)+1)))+
+  
+  labs(title=paste(A), y="Density",x=" ",cex=14)+
+  theme_classic()+ 
+ theme(plot.title = element_text(size = 14, face = "bold",hjust = 0.5),
+              text=element_text(),
+              axis.title = element_text(face="bold"),
+              axis.text.x=element_text(angle=45, hjust=1,colour="black", size = 12),
+              axis.text.y=element_text(colour="black", size = 12))+ 
+  guides(fill=FALSE)
+
+P2=ggplot(data=subset(data, label!="Solid Tissue Normal"), 
+         aes(x=exp_log2, fill=label))+
+    geom_density(fill="black", color="black", alpha=0.5, size=1.5)+
+  
+    geom_vline(xintercept=listMean,
+              size=2, color="goldenrod2")+
+    geom_vline(xintercept=listSD,
+              linetype="dashed", size=2, color="goldenrod2")+
+    geom_vline(xintercept=listMean_tum,
+              size=1, color="grey30")+
+    geom_vline(xintercept=listSD_tum,
+              linetype="dashed", size=1, color="grey30")+
+  
+  facet_grid(label ~.)+
+  scale_fill_manual(values=c("white", "grey30"))+
+  scale_x_continuous(limits=c(min(data$exp_log2),c(1+max(data$exp_log2))))+
+  labs(title=NULL, y="Density",x="LOG2 Normalized Counts",cex=14)+
+  theme_classic()+ 
+ theme(plot.title = element_text(NULL),
+              text=element_text(),
+              axis.title = element_text(face="bold"),
+              axis.text.x=element_text(angle=45, hjust=1,colour="black", size = 12),
+              axis.text.y=element_text(colour="black", size = 12))+ 
+  guides(fill=FALSE)
+g=grid.arrange(P1, P2,
+             ncol=1, nrow=2)
+
+ggsave(paste(pathRes,"/Exp",A, "_LUSC_DESeq2.eps", sep=""), device=cairo_ps, g)
+```
+
+
+#Binarize sur données normalisées
+
+##Translation des données normalisées : scale
+
+###Fonctions de références
+```{r}
+#Standardization
+Ma_function_Standardization=function(X) {
+  X=c((X-mean(X, na.rm=T))/sd(X, na.rm=T))
+}
+#Mean normalization
+Ma_function_MeanNormalization=function(X) {
+  X=c((X-mean(X, na.rm=T))/(max(X, na.rm = T)-min(X, na.rm=T)))
+}
+#Min Max Normalisation (feature rescalling)
+Ma_function_rescale=function(X) {
+  X=c(X/(max(X, na.rm = T)-min(X, na.rm=T)))
+}
+#scale() calcule un Z score
+```
+
+
+### Scaler les données
+```{r}
+load("C:/Users/marth/Desktop/These_Marthe/1_Bioinfo/180814_TCGA_All4/WS_TCGA_CBLL_All4.RData")
+Ma_functionlog2=function(X) {
+  X=log2(1+X)
+}
+
+#on enlève les anno
+Sup=which(is.element(colnames(dds_total), c("ENSG", "symbol.y", "bp_length.y"))==T)
+dds_total_sans_anno_non_norm=dds_total[,-Sup]
+dds_total_sans_anno=dds_total[,-Sup]
+rownames(dds_total_sans_anno)=make.names(dds_total$symbol.y, unique=T)
+rownames(dds_total_sans_anno_non_norm)=make.names(dds_total$symbol.y, unique=T)
+dim(dds_total_sans_anno)
+
+
+#On translate les données avec la fonction choisie
+
+dds_total_sans_anno=apply(dds_total_sans_anno, 1,Ma_functionlog2 )
+dds_total_sans_anno=t(dds_total_sans_anno)
+dds_total_sans_anno=as.data.frame(dds_total_sans_anno)
+dim(dds_total_sans_anno)
+dds_total_sans_anno=na.omit(dds_total_sans_anno)
+dim(dds_total_sans_anno)
+```
+
+##Mean + 3SD
+```{r}
+Ma_fonction_MEAN3SD=function(X) {
+  mean(X, na.rm=T)+3*sd(X, na.rm=T)
+}
+```
+
+Pour tester, on applique la méthode sur les CT et sur tous les gènes. 
+On choisira de traiter chaque cancer séparément (comme ils ont été normalisés séparément)
+
+##Sacle
+Ici pas de scale, déjà normale avec normalisation
+```{r}
+
+```
+
+
+
+```{r}
+mafonction_choisie=Ma_fonction_MEAN3SD
+
+#On calcule la moyenen d'expression pour chaque gène dans les éch normaux + 3SD
+ 
+Mean_CT_LUAD=apply(counts_luad[index_CT_luad, Norm_LUAD], 1, mafonction_choisie)
+
+ 
+Mean_CT_CRC=apply(counts_crc[index_CT_crc,Norm_COAD], 1,mafonction_choisie )
+
+ 
+Mean_CT_LUSC=apply(counts_lusc[index_CT_lusc,Norm_LUSC], 1,mafonction_choisie )
+
+ 
+Mean_CT_BRCA=apply(counts_breast[index_CT_breast,Norm_BRCA], 1,mafonction_choisie )
+head(Mean_CT_BRCA)
+
+#Et pour tous
+Mean_LUAD=apply(counts_luad[,Norm_LUAD], 1,mafonction_choisie )
+                   
+Mean_LUSC=apply(counts_lusc[,Norm_LUSC], 1,mafonction_choisie )
+Mean_COAD=apply(counts_crc[,Norm_COAD], 1,mafonction_choisie )
+Mean_BRCA=apply(counts_breast[,Norm_BRCA], 1,mafonction_choisie )
+head(Mean_BRCA)
+```
+
+## Construction des matrices binarisées
+
+On fait maintenant un tableau avec pour chaque TSG, chaque échantillon, les test > a Mean On met 1 si le gène i est très exprimé dans l'échantillon considéré, 0 sinon
+
+On iutilise ifelse(test, yes, no) et apply par ligne
+
+```{r}
+#on fait une matrice vide
+EE_CT_LUAD=matrix(NA, 
+                  nrow=length(index_CT_luad),
+                  ncol=dim(counts_luad)[2])
+EE_CT_LUSC=matrix(NA,nrow=length(index_CT_lusc),ncol=dim(counts_lusc)[2])
+EE_CT_COAD=matrix(NA,nrow=length(index_CT_crc),ncol=dim(counts_crc)[2])
+EE_CT_BRCA=matrix(NA,nrow=length(index_CT_breast),ncol=dim(counts_breast)[2])
+
+#On créé notre super fonction
+ExpBin=function(Mat_init, 
+                Mean) {
+ifelse(Mat_init > Mean, 1, 0)
+}
+#On teste la super fonction sur la première ligne, 
+#on va bien de 2 à A pour avoir toutes les colonnes numériques
+#ExpBin(log2(1+dds_total[index_CT[1],2:A]),Mean_CT[1])
+#On l'applique pour construire EE_CT
+EE_CT_LUAD=sapply(counts_luad[index_CT_luad,], 
+                ExpBin, 
+                Mean=Mean_CT_LUAD)
+EE_CT_LUSC=sapply(counts_lusc[index_CT_lusc,], 
+                ExpBin, 
+                Mean=Mean_CT_LUSC)
+EE_CT_COAD=sapply(counts_crc[index_CT_crc,], 
+                ExpBin, 
+                Mean=Mean_CT_CRC)
+EE_CT_BRCA=sapply(counts_breast[index_CT_breast,], 
+               ExpBin, 
+                Mean=Mean_CT_BRCA)
+
+EE_CT_total=cbind(EE_CT_LUAD, EE_CT_LUSC, EE_CT_COAD, EE_CT_BRCA)
+length(which(EE_CT_BRCA==1))/(dim(EE_CT_BRCA)[1]*dim(EE_CT_BRCA)[2])*100
+```
+
+
+```{r}
+#Et sur tous les gènes
+EE_LUAD=sapply(counts_luad[,], 
+                ExpBin, 
+                Mean=Mean_LUAD)
+EE_LUSC=sapply(counts_lusc[,], 
+                ExpBin, 
+                Mean=Mean_LUSC)
+EE_COAD=sapply(counts_crc[,], 
+                ExpBin, 
+                Mean=Mean_COAD)
+EE_BRCA=sapply(counts_breast[,], 
+               ExpBin, 
+                Mean=Mean_BRCA)
+#vEE_total=cbind(EE_LUAD, EE_LUSC, EE_COAD, EE_BRCA)
+length(which(EE_BRCA==1))/(dim(EE_BRCA)[1]*dim(EE_BRCA)[2])*100
+```
+
+
+##Somme
+```{r}
+#On calcule le nombre de TS exprimés par échantillon
+Sum_CT_COAD=colSums(na.omit(EE_CT_COAD))
+Sum_CT_LUAD=colSums(na.omit(EE_CT_LUAD))
+Sum_CT_BRCA=colSums(na.omit(EE_CT_BRCA))
+Sum_CT_LUSC=colSums(na.omit(EE_CT_LUSC))
+
+#Contrôle: psur tous les gènes
+Sum_COAD=colSums(na.omit(EE_COAD))
+Sum_LUAD=colSums(na.omit(EE_LUAD))
+Sum_LUSC=colSums(na.omit(EE_LUSC))
+Sum_BRCA=colSums(na.omit(EE_BRCA))
+```
+
+#Representations
+
+```{r}
+Sum=list(Sum_CT_COAD,
+         Sum_CT_LUAD,
+         Sum_CT_LUSC,
+         Sum_CT_BRCA) #list des nombres de TS / ech
+Norm=list(Norm_COAD,
+          Norm_LUAD,
+          Norm_LUSC,
+          Norm_BRCA)
+Tum=list(Tum_COAD,
+         Tum_LUAD, Tum_LUSC, Tum_BRCA)
+Titre=c("COAD", "LUAD", "LUSC", "BRCA")
+
+listgraphe_CT=list()
+
+data=list(data.frame(Sum=Sum_CT_COAD, 
+                Type=as.factor(coldata_crc$gdc_cases.samples.sample_type)),
+          data.frame(Sum=Sum_CT_LUAD, 
+                Type=as.factor(coldata_luad$gdc_cases.samples.sample_type)),
+          data.frame(Sum=Sum_CT_LUSC, 
+                Type=as.factor(coldata_lusc$gdc_cases.samples.sample_type)),
+          data.frame(Sum=Sum_CT_BRCA, 
+                Type=as.factor(coldata_breast$gdc_cases.samples.sample_type))
+)
+
+for (i in c(1:4)) {
+  data[[i]]$Type[which(is.element(data[[i]]$Type, 
+                                  c("Metastatic", "Primary Tumor", "Recurrent Tumor"))==TRUE)] = "Primary Tumor" 
+}
+
+#On génère tous les graphes en même temps
+for (i in c(1:4)) {
+listgraphe_CT[[i]] = ggplot(data=data[[i]],
+       aes(x=Sum, fill=Type, color=Type))+
+  geom_density(aes(x=Sum, fill=Type, color=Type), alpha=0.5, size=2)+
+  geom_histogram(aes(y=..density..), binwidth=10, alpha=0.5, color="black", position="dodge") + 
+  
+
+  geom_vline(xintercept=mean(Sum[[i]][Norm[[i]]]),
+              linetype="dashed", size=2, color="goldenrod4")+
+    geom_vline(xintercept=mean(Sum[[i]][Tum[[i]]]),
+              linetype="dashed", size=2, color="grey30")+
+  scale_fill_manual(values=c("grey50", "goldenrod3"))+
+  scale_color_manual(values=c("grey50",  "goldenrod3"))+
+
+  labs(title=paste(Titre[i],": CT genes"),
+       y="density",x="Exp",cex=10)+
+  theme_classic()+ 
+ theme(plot.title = element_text(size = 14, face = "bold",hjust = 0.5),
+              text=element_text(),
+              axis.title = element_text(face="bold"),
+              axis.text.x=element_text(angle=45, hjust=1,colour="black", size = 11),
+              axis.text.y=element_text(colour="black", size = 9))+ 
+  guides(fill=FALSE, color=FALSE)
+}
+
+	
+
+grid.arrange(listgraphe_CT[[1]], listgraphe_CT[[2]], listgraphe_CT[[3]], listgraphe_CT[[4]],
+             nrow=2, ncol=2)
+
+```
+
+```{r}
+g=grid.arrange(listgraphe_CT[[1]], listgraphe_CT[[2]], listgraphe_CT[[3]], listgraphe_CT[[4]],
+             nrow=2, ncol=2)
+
+ggsave(paste(pathRes,"/NombreCTparEch_histo_Deseq.eps", sep=""), device=cairo_ps, g, scale = 3)
+```
+
+
+#### scatterplot
+
+On veut créer un graphique inspiré des mutation load cf
+https://www.nature.com/articles/nature12477/figures/1
+
+https://www.ncbi.nlm.nih.gov/core/lw/2.0/html/tileshop_pmc/tileshop_pmc_inline.html?title=Click%20on%20image%20to%20zoom&p=PMC3&id=3919509_nihms-471461-f0001.jpg
+
+##### Normal vs Tumors
+```{r}
+data_CT = data.frame(CT = c(Sum_CT_COAD, Sum_CT_LUAD, Sum_CT_LUSC, Sum_CT_BRCA),
+                     Type= c(rep("COAD", length(Sum_CT_COAD)), 
+                             rep("LUAD", length(Sum_CT_LUAD)),
+                             rep("LUSC", length(Sum_CT_LUSC)),
+                             rep("BRCA", length(Sum_CT_BRCA))),
+                     Genre = c(as.character(coldata_crc$gdc_cases.samples.sample_type),
+                               as.character(coldata_luad$gdc_cases.samples.sample_type),
+                               as.character(coldata_lusc$gdc_cases.samples.sample_type),
+                              as.character(coldata_breast$gdc_cases.samples.sample_type)))
+head(data_CT)
+data_CT$names=rownames(data_CT)
+head(data_CT)
+
+
+```
+
+
+```{r}
+#Problème pour le sort : nombreux ex-aequo
+
+#On utilise Order (sort ne gère pas les ex aequo)
+Order_names = c( subset(data_CT, Type == "COAD")$names[order(subset(data_CT, Type == "COAD")$CT)],
+                 rep(" ", 100),
+                 subset(data_CT, Type == "LUAD")$names[order(subset(data_CT, Type == "LUAD")$CT)],
+                 rep(" ", 100),
+                 subset(data_CT, Type == "LUSC")$names[order(subset(data_CT, Type == "LUSC")$CT)],
+                 rep(" ", 100),
+                 subset(data_CT, Type == "BRCA")$names[order(subset(data_CT, Type == "BRCA")$CT)])
+
+
+V_coad = length(subset(data_CT, Type == "COAD")$CT)+ 150
+V_luad = length(subset(data_CT, Type == "LUAD")$CT) + 100 + V_coad
+V_lusc = length(subset(data_CT, Type == "LUSC")$CT)+ 100 +  V_luad
+V_brca = length(subset(data_CT, Type == "BRCA")$CT) + 100 + V_lusc
+
+g = ggplot( data = data_CT, 
+              aes(y = CT , 
+                  x = names,
+                  color = Genre))  +
+    scale_color_manual(values = c("black", "grey", "black", "orange"))+
+
+          geom_point( size=3, shape=19) +
+          scale_x_discrete(limits = c(rep(" ", 100), Order_names,rep(" ", 100)))+
+ 
+   geom_vline(xintercept = V_coad)+
+  geom_vline(xintercept = V_luad)+
+  geom_vline(xintercept = V_lusc)+
+  
+  annotate("text",label = c("COAD", "LUAD", "LUSC", "BRCA"), 
+           x = c(V_coad/2, c(V_coad + 50 + length(subset(data_CT, Type == "LUAD")$CT)/2), 
+                 c(V_luad + 50 + length(subset(data_CT, Type == "LUSC")$CT)/2), 
+                 c( V_lusc + 50 + length(subset(data_CT, Type == "BRCA")$CT)/2)),
+           y = 800,  color = "black", size = 3) +
+
+          labs(title="Graphe des Tumeurs",
+               y=" # CT activés",
+               x=" ")+
+  theme_classic()+
+  theme(plot.title = element_text(size = 12, face = "bold",hjust = 0.5),         #Mise en page
+              text=element_text(),
+              axis.title = element_text(face="bold", size=12),
+              axis.text.x=NULL,
+              axis.text.y=element_text(colour="black", size = 10),
+        legend.text = element_text(size=12),
+        legend.position="right")
+g
+```
+
+
+# Statistiques genes
+##frequence
+```{r}
+
+#on calcule le nombre d'échantillon qui expriment un TS donné
+Expression_CT_COAD_Norm=rowSums(na.omit(EE_CT_COAD[,Norm_COAD]), na.rm=T) /   
+                                                          dim(EE_CT_COAD[,Norm_COAD])[2]
+Expression_CT_LUAD_Norm=rowSums(na.omit(EE_CT_LUAD[,Norm_LUAD]), na.rm=T)/   
+                                                          dim(EE_CT_LUAD[,Norm_LUAD])[2]
+Expression_CT_BRCA_Norm=rowSums(na.omit(EE_CT_BRCA[,Norm_BRCA]), na.rm=T)/   
+                                                          dim(EE_CT_BRCA[,Norm_BRCA])[2]
+Expression_CT_LUSC_Norm=rowSums(na.omit(EE_CT_LUSC[,Norm_LUSC]), na.rm=T)/   
+                                                          dim(EE_CT_LUSC[,Norm_LUSC])[2]
+
+Expression_CT_COAD_Tum=rowSums(na.omit(EE_CT_COAD[,Tum_COAD]), na.rm=T)/   
+                                                          dim(EE_CT_COAD[,Tum_COAD])[2]
+Expression_CT_LUAD_Tum=rowSums(na.omit(EE_CT_LUAD[,Tum_LUAD]), na.rm=T)/   
+                                                          dim(EE_CT_LUAD[,Tum_LUAD])[2]
+Expression_CT_BRCA_Tum=rowSums(na.omit(EE_CT_BRCA[,Tum_BRCA]), na.rm=T)/   
+                                                          dim(EE_CT_BRCA[,Tum_BRCA])[2]
+Expression_CT_LUSC_Tum=rowSums(na.omit(EE_CT_LUSC[,Tum_LUSC]), na.rm=T)/   
+                                                          dim(EE_CT_LUSC[,Norm_LUSC])[2]
+
+Table_CT_DESQ=data.frame(Names= rowdata_breast$symbol[index_CT_breast],
+                        Expression_CT_COAD_Norm=Expression_CT_COAD_Norm,
+                         Expression_CT_COAD_Tum=Expression_CT_COAD_Tum,
+                         Expression_CT_LUAD_Norm = Expression_CT_LUAD_Norm,
+                         Expression_CT_LUAD_Tum = Expression_CT_LUAD_Tum, 
+                         Expression_CT_BRCA_Norm = Expression_CT_BRCA_Norm,
+                         Expression_CT_BRCA_Tum = Expression_CT_BRCA_Tum,
+                         Expression_CT_LUSC_Norm = Expression_CT_LUSC_Norm,
+                         Expression_CT_LUSC_Tum = Expression_CT_LUSC_Norm)
+head(Table_CT_DESQ)
+
+write.table(Table_CT_DESQ, 
+            paste(pathRes, "/Table_CT_Freq_DESEQ2.txt", sep=""), 
+            sep = "\t", quote = FALSE,  row.names = FALSE)
+```
+
+##Mean SD
+```{r}
+
+Table_CT_Mean_DESEQ = data.frame(Names =  rowdata_breast$symbol[index_CT_breast],
+  
+                                Mean_COAD_Norm = apply(counts_crc[index_CT_crc, Norm_COAD], 
+                                                       1, Ma_fonction_mean),
+                                SD_COAD_Norm = apply(counts_crc[index_CT_crc, Norm_COAD], 
+                                                       1, Ma_fonction_SD),
+                                Mean_COAD_Tum = apply(counts_crc[index_CT_crc, Tum_COAD], 
+                                                       1, Ma_fonction_mean),
+                                SD_COAD_Tum = apply(counts_crc[index_CT_crc, Tum_COAD], 
+                                                       1, Ma_fonction_SD),
+                                
+                                Mean_LUAD_Norm = apply(counts_luad[index_CT_luad, Norm_LUAD], 
+                                                       1, Ma_fonction_mean),
+                                SD_LUAD_Norm = apply(counts_luad[index_CT_luad, Norm_LUAD], 
+                                                       1, Ma_fonction_SD),
+                                Mean_LUAD_Tum = apply(counts_luad[index_CT_luad, Tum_LUAD], 
+                                                       1, Ma_fonction_mean),
+                                SD_LUAD_Tum = apply(counts_luad[index_CT_luad, Tum_LUAD], 
+                                                       1, Ma_fonction_SD),
+                                
+                                  Mean_LUSC_Norm = apply(counts_lusc[index_CT_lusc, Norm_LUSC], 
+                                                       1, Ma_fonction_mean),
+                                SD_LUSC_Norm = apply(counts_lusc[index_CT_lusc, Norm_LUSC], 
+                                                       1, Ma_fonction_SD),
+                                Mean_LUSC_Tum = apply(counts_lusc[index_CT_lusc, Tum_LUSC], 
+                                                       1, Ma_fonction_mean),
+                                SD_LUSC_Tum = apply(counts_lusc[index_CT_lusc, Tum_LUSC], 
+                                                       1, Ma_fonction_SD),
+                                
+                                Mean_BRCA_Norm = apply(counts_breast[index_CT_breast, Norm_BRCA], 
+                                                       1, Ma_fonction_mean),
+                                SD_BRCA_Norm = apply(counts_breast[index_CT_breast, Norm_BRCA], 
+                                                       1, Ma_fonction_SD),
+                                Mean_BRCA_Tum = apply(counts_breast[index_CT_breast, Tum_BRCA], 
+                                                       1, Ma_fonction_mean),
+                                SD_BRCA_Tum = apply(counts_breast[index_CT_breast, Tum_BRCA], 
+                                                       1, Ma_fonction_SD))
+
+head(Table_CT_Mean_DESEQ)
+
+write.table(Table_CT_Mean_DESEQ, 
+            paste(pathRes, "/Table_CT_Mean_DESEQ.txt", sep=""), 
+            sep = "\t", quote = FALSE,  row.names = FALSE)
+```
+
+
+
+#Statistiques Tumeurs
+###Frequence
+
+```{r}
+#On calcule le nombre de TS exprimés par échantillon, en distinguant tumeur / NT
+Sum_CT_COAD_Norm=colSums(na.omit(EE_CT_COAD[,Norm_COAD]), na.rm=T) /   
+                                                          dim(EE_CT_COAD[,Norm_COAD])[1]
+Sum_CT_LUAD_Norm=colSums(na.omit(EE_CT_LUAD[,Norm_LUAD]), na.rm=T) /   
+                                                          dim(EE_CT_LUAD[,Norm_LUAD])[1]
+Sum_CT_BRCA_Norm=colSums(na.omit(EE_CT_BRCA[,Norm_BRCA]), na.rm=T) /   
+                                                          dim(EE_CT_BRCA[,Norm_BRCA])[1]
+Sum_CT_LUSC_Norm=colSums(na.omit(EE_CT_LUSC[,Norm_LUSC]), na.rm=T) /   
+                                                          dim(EE_CT_LUSC[,Norm_LUSC])[1]
+
+Sum_CT_COAD_Tum=colSums(na.omit(EE_CT_COAD[,Tum_COAD]), na.rm=T) /   
+                                                          dim(EE_CT_COAD[,Tum_COAD])[1]
+Sum_CT_LUAD_Tum=colSums(na.omit(EE_CT_LUAD[,Tum_LUAD]), na.rm=T) /   
+                                                          dim(EE_CT_LUAD[,Tum_LUAD])[1]
+Sum_CT_BRCA_Tum=colSums(na.omit(EE_CT_BRCA[,Tum_BRCA]), na.rm=T) /   
+                                                          dim(EE_CT_BRCA[,Tum_BRCA])[1]
+Sum_CT_LUSC_Tum=colSums(na.omit(EE_CT_LUSC[,Tum_LUSC]), na.rm=T) /   
+                                                          dim(EE_CT_LUSC[,Tum_LUSC])[1]
+
+
+
+Table_Tum_Freq_DESEQ.txt=data.frame(Names= c(coldata_crc$gdc_cases.samples.portions.analytes.aliquots.submitter_id[Norm_COAD],
+                                      coldata_crc$gdc_cases.samples.portions.analytes.aliquots.submitter_id[Tum_COAD],
+                                      coldata_luad$gdc_cases.samples.portions.analytes.aliquots.submitter_id[Norm_LUAD],
+                                     coldata_luad$gdc_cases.samples.portions.analytes.aliquots.submitter_id[Tum_LUAD],
+                                      
+                                      coldata_breast$gdc_cases.samples.portions.analytes.aliquots.submitter_id[Norm_BRCA],
+                                      coldata_breast$gdc_cases.samples.portions.analytes.aliquots.submitter_id[Tum_BRCA],
+                                      coldata_lusc$gdc_cases.samples.portions.analytes.aliquots.submitter_id[Norm_LUSC],
+                                      coldata_lusc$gdc_cases.samples.portions.analytes.aliquots.submitter_id[Tum_LUSC]),
+                             CancerType = c(rep("COAD",
+                                          length(c(names(Sum_CT_COAD_Norm),names(Sum_CT_COAD_Tum)))),
+                                          rep("LUAD",
+                                          length(c(names(Sum_CT_LUAD_Norm),names(Sum_CT_LUAD_Tum)))),
+                                          rep("BRCA",
+                                          length(c(names(Sum_CT_BRCA_Norm),names(Sum_CT_BRCA_Tum)))),
+                                          rep("LUSC",
+                                          length(c(names(Sum_CT_LUSC_Norm),names(Sum_CT_LUSC_Tum))))) ,
+                               Type = c(rep("NT", length(Sum_CT_COAD_Norm)),
+                                        rep("Tum", length(Sum_CT_COAD_Tum)),
+                                        rep("NT", length(Sum_CT_LUAD_Norm)),
+                                        rep("Tum", length(Sum_CT_LUAD_Tum)),
+                                        rep("NT", length(Sum_CT_BRCA_Norm)),
+                                        rep("Tum", length(Sum_CT_BRCA_Tum)),
+                                        rep("NT", length(Sum_CT_LUSC_Norm)),
+                                        rep("Tum", length(Sum_CT_LUSC_Tum))),
+                               values = c(Sum_CT_COAD_Norm,Sum_CT_COAD_Tum, Sum_CT_LUAD_Norm,
+                                          Sum_CT_LUAD_Tum,Sum_CT_BRCA_Norm, Sum_CT_BRCA_Tum,
+                                          Sum_CT_LUSC_Norm, Sum_CT_LUSC_Tum))
+
+head(Table_Tum_Freq_DESEQ.txt)
+
+write.table(Table_Tum_Freq_DESEQ.txt, 
+            paste(pathRes, "/Table_Tum_Freq_DESEQ.txt", sep=""), 
+            sep = "\t", quote = FALSE,  row.names = FALSE)
+```
+
+
+###Mean et SD
+
+```{r}
+Table_Tum = cbind(counts_crc[index_CT_crc, Norm_COAD],
+                  counts_crc[index_CT_crc, Tum_COAD],
+                  counts_luad[index_CT_luad, Norm_LUAD],
+                  counts_luad[index_CT_luad, Tum_LUAD],
+                  counts_breast[index_CT_breast, Norm_BRCA],
+                  counts_breast[index_CT_breast, Tum_BRCA],
+                  counts_lusc[index_CT_lusc, Norm_LUSC],
+                  counts_lusc[index_CT_lusc, Tum_LUSC])
+
+
+Table_Tum_Mean_DESEQ = data.frame(Names= names(apply(Table_Tum,  2, Ma_fonction_mean)),
+                                 Mean = apply(Table_Tum,2, Ma_fonction_mean),
+                                 SD = apply(Table_Tum,2, Ma_fonction_SD),
+                                 CancerType = c(rep("COAD",
+                                          length(c(names(Sum_CT_COAD_Norm),names(Sum_CT_COAD_Tum)))),
+                                          rep("LUAD",
+                                          length(c(names(Sum_CT_LUAD_Norm),names(Sum_CT_LUAD_Tum)))),
+                                          rep("BRCA",
+                                          length(c(names(Sum_CT_BRCA_Norm),names(Sum_CT_BRCA_Tum)))),
+                                          rep("LUSC",
+                                          length(c(names(Sum_CT_LUSC_Norm),names(Sum_CT_LUSC_Tum))))) ,
+                               Type = c(rep("NT", length(Sum_CT_COAD_Norm)),
+                                        rep("Tum", length(Sum_CT_COAD_Tum)),
+                                        rep("NT", length(Sum_CT_LUAD_Norm)),
+                                        rep("Tum", length(Sum_CT_LUAD_Tum)),
+                                        rep("NT", length(Sum_CT_BRCA_Norm)),
+                                        rep("Tum", length(Sum_CT_BRCA_Tum)),
+                                        rep("NT", length(Sum_CT_LUSC_Norm)),
+                                        rep("Tum", length(Sum_CT_LUSC_Tum)))
+  
+)
+
+head(Table_Tum_Mean_DESEQ)
+
+write.table(Table_Tum_Mean_DESEQ, 
+            paste(pathRes, "/Table_Tum_Mean_DESEQ", sep=""), 
+            sep = "\t", quote = FALSE,  row.names = FALSE)
+```
+
+
+
+
+
+#Heatmap
+
+##Légendes
+```{r}
+A=dim(coldata_total)[1]
+
+Histo=as.factor(coldata_total$gdc_cases.project.name)
+levels(as.factor(coldata_total$gdc_cases.project.name))
+
+Type=as.factor(coldata_total$gdc_cases.samples.sample_type)
+
+
+Stage=coldata_total$cgc_case_pathologic_stage
+#on recode pour qe ce soit plus lisible
+Stage[which(is.element(c(coldata_total$cgc_case_pathologic_stage), c("Stage I", "Stage IA",   "Stage IB","Stage II"  , "Stage IIA", "Stage IIB", "Stage IIC" ))==TRUE)]="I-II"
+Stage[which(is.element(c(coldata_total$cgc_case_pathologic_stage), c( "Stage III",  "Stage IIIA" ,"Stage IIIB" ,"Stage IIIC", "Stage IV"  , "Stage IVA" , "Stage IVB" ))==TRUE)]="III-IV"
+
+Stage[which(is.element(c(coldata_total$gdc_cases.samples.sample_type), c("NA", "Solid Tissue Normal"))==TRUE)]=NA
+Stage=as.factor(Stage)
+
+Kras=as.factor(coldata_total$xml_kras_mutation_found)
+Braf=as.factor(coldata_total$xml_braf_gene_analysis_result)
+
+MSI=as.factor(coldata_total$xml_microsatellite_instability)
+
+gender=as.factor(coldata_total$cgc_case_gender)
+
+
+clab=data.frame(Histo, Type, Stage, gender,
+                Kras, Braf, MSI)
+
+
+Liste=list(Histo=c("Breast Invasive Carcinoma"="hotpink3",
+                   "Colon Adenocarcinoma"="green4","Lung Adenocarcinoma"="cyan2",
+                  "Lung Squamous Cell Carcinoma"="navy"),
+           Type=c("Primary Tumor"="grey","Recurrent Tumor"="grey","Metastatic"="grey",
+                   "Solid Tissue Normal"="goldenrod2",
+                  "Recurrent Tumor"="black"),
+           Stage=c("I-II"="goldenrod2",
+                   "III-IV"="orange3",
+                   "Stage Tis"="white",
+                   "Stage X"="white"),
+           gender=c("FEMALE"="tomato3",
+                    "MALE"="steelblue4"),
+           Kras=c("NO"="black",
+                  "YES"="yellow"),
+           Braf=c("Abnormal"="yellow",
+                  "Normal"="black"),
+           MSI=c("NO"="black",
+                 "YES"="red"),
+           Sum_CT_COAD=colorRamp2(c(0, quantile(Sum_CT_COAD[Tum_COAD], 0.1),
+                                    mean(Sum_CT_COAD) ,quantile(Sum_CT_COAD[Tum_COAD], 0.9)),
+                                  c("grey","darkcyan", "white","hotpink4"))
+           )
+```
+
+```{r}
+
+#on prend seulement les anno comprisent dans la heatmap
+row_anno=cbind(subset(table_anno, HUGO %in% rownames(na.omit(EE_CT_COAD))),
+               label_tissu_ts)
+EE_CT_total2=EE_CT_COAD
+#EE_CT_All==EE_CT_All[- which(duplicated(rownames(EE_CT_All))==T),]
+#on range les deux tableaux dans le meme ordre
+row_anno=row_anno[order(row_anno$HUGO),]
+EE_CT_total2=EE_CT_total2[order(rownames(EE_CT_total2)),]
+#summary(row_anno[,2:8])
+colnames(row_anno)
+```
+
+
+```{r}
+#Choisir les méthodes de clustering
+Method_dist="binary"
+Method_asso="ward.D2"
+#Calcul clust
+column_tree = hclust(
+                dist(t(EE_CT_total),
+                method = Method_dist),
+              method = Method_asso)
+#Anno colonnes
+ha= HeatmapAnnotation(df = clab,
+                       col =  Liste,
+                      annotation_legend_param = list(title_gp = gpar(fontsize = 8),
+        labels_gp = gpar(fontsize = 6),grid_height = unit(4, "mm")))
+colors = structure(c("white", "red"), names = c("0","1"))
+#deuxieme annotation colonne rangée dans l'ordre
+ha2= HeatmapAnnotation(df = clab[ column_tree$order,],                     
+                       col =  Liste,
+                         show_legend = FALSE)
+#Premiere heatmap : l'expression normalisée, en log2
+#ht1=Heatmap(as.matrix(EE_CT_total[,column_tree$order]),
+ #  name="expression",
+  # cluster_columns = FALSE,
+   #column_dend_reorder = FALSE,
+#   column_title = "Testis-spe Gene log2(Exp)", #titre
+ #  column_title_gp = gpar(fontsize = 10),
+  #  km = 2,
+#   row_title_gp = gpar(fontsize = c(6,6)),
+ #   show_column_names = FALSE, #pas de nom des éch
+  #  show_row_names = FALSE, #ni des gènes
+#    top_annotation = ha2, #en top, les anno Cancer / NT etc
+ #  top_annotation_height = unit(1.5, "cm"),
+  #  show_heatmap_legend = TRUE,
+   # heatmap_legend_param = list(legend_direction = "vertical",
+    #legend_width = unit(3, "cm"), title_position = "topcenter",
+    #fontsize = 6))
+#Deuxime heatmap binaires
+ht2=Heatmap(as.matrix(na.omit(EE_CT_total[,])),
+    name="ht2",
+    cluster_columns = TRUE,
+    clustering_distance_columns  = Method_dist,
+    clustering_method_columns = Method_asso,
+    column_dend_reorder = T,
+    column_title = "CT & TS COAD",
+    column_title_gp = gpar(fontsize = 8),
+    km = 3,
+    show_column_names = FALSE,
+    col = colors,
+    show_row_names = FALSE,
+    show_heatmap_legend = F,
+    top_annotation = ha,
+    top_annotation_height = unit(2, "cm"))
+ht_list =  ht2 + ht1
+draw(ht_list, main_heatmap = "ht2",
+     cluster_rows = T,
+     column_title = "TS",
+    column_title_gp = gpar(fontsize = 12, fontface = "bold"),
+    heatmap_legend_side = "left",
+    annotation_legend_side = "bottom")
+```
+
+
+
+
+#Avec les données TPM
+
+###Installer TCGA biolinks
+from 
+devtools::install_github(repo = "BioinformaticsFMRP/TCGAbiolinks",dependencies = T)
+
+```{r}
+library(TCGAbiolinks)
+library(dplyr)
+library(DT)
+
+packageVersion("TCGAbiolinks")
+```
+
+##Télécharger les données (Merci Jérémy!)
+
+Lire ca : http://bioconductor.org/packages/release/bioc/vignettes/TCGAbiolinks/inst/doc/download_prepare.html
+
+c'est long (mais semble moins long que par GDCquery)
+
+
+####################################################################################################
+Ne pas exécuter impunément c'est super long !!
+####################################################################################################
+
+```{r}
+#Testé si le serveur GDC est dispo (parfois en maintenance)
+isServeOK()
+
+query <- GDCquery(project = "TCGA-SKCM",
+                  data.category = "Gene expression",
+                  data.type = "Gene expression quantification",
+                  platform = "Illumina HiSeq", 
+                  file.type  = "results",
+                 # barcode = "TCGA-BF-AAOU",
+                  experimental.strategy = "RNA-Seq",
+                  legacy = TRUE)
+
+
+                  
+GDCdownload(query, method = "api", files.per.chunk = 50) #download par petits paquets
+data_brca <- GDCprepare(query) #Prépare l'env de travail : SummarizedExperiment à partir des data
+```
+
+
+o GDCquery: Searching in GDC database
+
+Genome of reference: hg19
+oo Accessing GDC. This might take a while...
+
+ooo Project: TCGA-BRCA
+
+oo Filtering results
+
+ooo By platform
+ooo By experimental.strategy
+ooo By data.type
+ooo By file.type
+
+oo Checking data
+
+ooo Check if there are duplicated cases
+ooo Check if there results for the query
+
+o Preparing output
+
+
+
+
+Downloading data for project TCGA-BRCA
+GDCdownload will download 1215 files. A total of 1.842027909 GB
+Downloading chunk 1 of 25 (50 files, size = 75.895848 MB) as Thu_Nov_15_13_43_46_2018_0.tar.gz
+Downloading: 30 MB     Downloading chunk 2 of 25 (50 files, size = 75.807034 MB) as Thu_Nov_15_13_43_46_2018_1.tar.gz
+Downloading: 30 MB     Downloading chunk 3 of 25 (50 files, size = 75.84429 MB) as Thu_Nov_15_13_43_46_2018_2.tar.gz
+Downloading: 30 MB     Downloading chunk 4 of 25 (50 files, size = 75.755553 MB) as Thu_Nov_15_13_43_46_2018_3.tar.gz
+Downloading: 30 MB     Downloading chunk 5 of 25 (50 files, size = 75.789367 MB) as Thu_Nov_15_13_43_46_2018_4.tar.gz
+Downloading: 30 MB     Downloading chunk 6 of 25 (50 files, size = 75.914264 MB) as Thu_Nov_15_13_43_46_2018_5.tar.gz
+Downloading: 31 MB     Downloading chunk 7 of 25 (50 files, size = 75.819492 MB) as Thu_Nov_15_13_43_46_2018_6.tar.gz
+Downloading: 30 MB     Downloading chunk 8 of 25 (50 files, size = 75.775712 MB) as Thu_Nov_15_13_43_46_2018_7.tar.gz
+Downloading: 30 MB     Downloading chunk 9 of 25 (50 files, size = 75.823065 MB) as Thu_Nov_15_13_43_46_2018_8.tar.gz
+Downloading: 30 MB     Downloading chunk 10 of 25 (50 files, size = 75.645818 MB) as Thu_Nov_15_13_43_46_2018_9.tar.gz
+Downloading: 30 MB     Downloading chunk 11 of 25 (50 files, size = 75.832547 MB) as Thu_Nov_15_13_43_46_2018_10.tar.gz
+Downloading: 30 MB     Downloading chunk 12 of 25 (50 files, size = 75.841293 MB) as Thu_Nov_15_13_43_46_2018_11.tar.gz
+Downloading: 30 MB     Downloading chunk 13 of 25 (50 files, size = 75.770528 MB) as Thu_Nov_15_13_43_46_2018_12.tar.gz
+Downloading: 30 MB     Downloading chunk 14 of 25 (50 files, size = 75.906224 MB) as Thu_Nov_15_13_43_46_2018_13.tar.gz
+Downloading: 30 MB     Downloading chunk 15 of 25 (50 files, size = 75.683933 MB) as Thu_Nov_15_13_43_46_2018_14.tar.gz
+Downloading: 30 MB     Downloading chunk 16 of 25 (50 files, size = 75.760049 MB) as Thu_Nov_15_13_43_46_2018_15.tar.gz
+Downloading: 30 MB     Downloading chunk 17 of 25 (50 files, size = 75.809091 MB) as Thu_Nov_15_13_43_46_2018_16.tar.gz
+Downloading: 30 MB     Downloading chunk 18 of 25 (50 files, size = 75.767376 MB) as Thu_Nov_15_13_43_46_2018_17.tar.gz
+Downloading: 30 MB     Downloading chunk 19 of 25 (50 files, size = 75.980514 MB) as Thu_Nov_15_13_43_46_2018_18.tar.gz
+Downloading: 31 MB     Downloading chunk 20 of 25 (50 files, size = 75.758622 MB) as Thu_Nov_15_13_43_46_2018_19.tar.gz
+Downloading: 30 MB     Downloading chunk 21 of 25 (50 files, size = 75.807803 MB) as Thu_Nov_15_13_43_46_2018_20.tar.gz
+Downloading: 30 MB     Downloading chunk 22 of 25 (50 files, size = 75.839067 MB) as Thu_Nov_15_13_43_46_2018_21.tar.gz
+Downloading: 30 MB     Downloading chunk 23 of 25 (50 files, size = 75.717816 MB) as Thu_Nov_15_13_43_46_2018_22.tar.gz
+Downloading: 30 MB     Downloading chunk 24 of 25 (50 files, size = 75.705523 MB) as Thu_Nov_15_13_43_46_2018_23.tar.gz
+Downloading: 30 MB     Downloading chunk 25 of 25 (15 files, size = 22.77708 MB) as Thu_Nov_15_13_43_46_2018_24.tar.gz
+Downloading: 9.2 MB
+
+ |========================================================================================| 100%Downloading genome informati
+on (try:0) Using: Homo sapiens genes (GRCh37.p13)
+Starting to add information to samples
+ => Add clinical information to samples
+Add FFPE information. More information at: 
+=> https://cancergenome.nih.gov/cancersselected/biospeccriteria 
+=> http://gdac.broadinstitute.org/runs/sampleReports/latest/FPPP_FFPE_Cases.html
+ => Adding subtype information to samples
+brca subtype information from:doi.org/10.1016/j.ccell.2018.03.014
+
+##Explorer le baby
+
+```{r}
+library(SummarizedExperiment)
+#assay(data_brca,2)
+test <- assay(data_brca,2)
+
+#Multplier par 10^6
+test=test*10^6
+dim(test)
+```
+
+## Density
+```{r}
+A="MAGEA1"
+id_A=grep(A, rownames(test))
+ rownames(test)[id_A] #c'est donc le premier
+ 
+#on construit le tableau contenant la valeur d'expression du gene A & les labels, ici pour le sein
+data=data.frame(exp=test[id_A[1],],
+                label=colData(data_brca)$definition)
+
+head(data)
+
+colnames(data)=c("exp", "label")
+
+#Scale
+data$exp_log2=log2(1+data$exp)
+
+#renommer les labels: on groupe ensemble toutes le tumeurs (primaires, récu et méta)
+data$label[which(data$label=="Metastatic")]="Primary solid Tumor"
+data$label[which(data$label=="Recurrent Tumor")]="Primary solid Tumor"
+data$label=relevel(data$label,ref="Solid Tissue Normal")
+
+
+listMean=mean(subset(data, label=="Solid Tissue Normal")$exp_log2)
+listSD = sd(subset(data, label=="Solid Tissue Normal")$exp_log2)
+            
+
+
+P1=ggplot(data=subset(data, label=="Solid Tissue Normal"), 
+         aes(x=exp_log2, fill=label))+
+
+    geom_density(fill="orange", color="orange", alpha=0.5, size=1.5)+
+  
+    geom_vline(xintercept=listMean,
+              size=2, color="orange")+
+    geom_vline(xintercept=listMean+3*listSD,
+              linetype="dashed", size=2, color="orange")+
+  
+  facet_grid(label ~.)+
+  scale_fill_manual(values=c("white", "grey30"))+
+  scale_x_continuous(limits=c(min(data$exp_log2),max(subset(data, label=="Solid Tissue Normal")$exp_log2)))+
+  
+  labs(title=paste(A), y="Density",x=" ",cex=14)+
+  theme_classic()+ 
+ theme(plot.title = element_text(size = 14, face = "bold",hjust = 0.5),
+              text=element_text(),
+              axis.title = element_text(face="bold"),
+              axis.text.x=element_text(angle=45, hjust=1,colour="black", size = 12),
+              axis.text.y=element_text(colour="black", size = 12))+ 
+  guides(fill=FALSE)
+
+P2=ggplot(data=subset(data, label!="Solid Tissue Normal"), 
+         aes(x=exp_log2, fill=label))+
+    geom_density(fill="black", color="black", alpha=0.5, size=1.5)+
+  
+    geom_vline(xintercept=listMean,
+              size=2, color="orange")+
+    geom_vline(xintercept=listMean+3*listSD,
+              linetype="dashed", size=2, color="orange")+
+  
+  facet_grid(label ~.)+
+  scale_fill_manual(values=c("white", "grey30"))+
+  scale_x_continuous(limits=c(min(data$exp_log2),max(data$exp_log2)))+
+  labs(title=NULL, y="Density",x="LOG2 Normalized Counts",cex=14)+
+  theme_classic()+ 
+ theme(plot.title = element_text(NULL),
+              text=element_text(),
+              axis.title = element_text(face="bold"),
+              axis.text.x=element_text(angle=45, hjust=1,colour="black", size = 12),
+              axis.text.y=element_text(colour="black", size = 12))+ 
+  guides(fill=FALSE)
+g= grid.arrange(P1, P2,
+             ncol=1, nrow=2)
+ggsave(paste(pathRes,"/ExpMageA1_BRCA_FPKM.eps", sep=""), device=cairo_ps, g)
+```
+
+
+
+
+
+
+
+
+

@@ -1,0 +1,277 @@
+---
+title: "R Notebook"
+output: html_notebook
+
+---
+#Intro
+
+##Paths
+```{r}
+pathData = "C:/Users/marth/Desktop/These_Marthe/1_Bioinfo/180814_TCGA_All4"
+pathRes = "C:/Users/marth/Desktop/These_Marthe/1_Bioinfo/181115_TCGApostSeminaire/Results_Comparizon"
+```
+
+
+##LIbraries
+```{r}
+library(eulerr)
+
+library(ggplot2)
+library(gridExtra)
+
+```
+
+
+## Data
+```{r}
+CT_Freq_FPKM = read.table("C:/Users/marth/Desktop/These_Marthe/1_Bioinfo/181115_TCGApostSeminaire/Results_FPKM/Table_CT_Freq_FPKM.txt", h = T, sep = "\t" )
+head(CT_Freq_FPKM)
+
+CT_Freq_DESEQ = read.table("C:/Users/marth/Desktop/These_Marthe/1_Bioinfo/181115_TCGApostSeminaire/Results_DESEq2/Table_CT_Freq_DESEQ2.txt", h = T, sep = "\t" )
+head(CT_Freq_DESEQ)
+```
+
+```{r}
+grep("ADAM12", CT_Freq_FPKM$Names, "[^[:alnum:]]")
+```
+
+#TS frequ
+
+##Intersection premier decile
+
+```{r}
+Quant_FPKM = CT_Freq_FPKM$Names[which(CT_Freq_FPKM$Expression_CT_LUSC_Tum >= quantile(CT_Freq_FPKM$Expression_CT_LUSC_Tum, 0.75))]
+
+Quant_DESEQ =  CT_Freq_DESEQ$Names.value[which(CT_Freq_DESEQ$Expression_CT_LUSC_Tum >= quantile(CT_Freq_DESEQ$Expression_CT_LUSC_Tum, 0.75))]
+
+length(Quant_DESEQ)
+
+interesect = NULL
+for (i in seq_along(Quant_DESEQ)) {
+  interesect = c(interesect,
+                 grep(Quant_DESEQ[i], Quant_FPKM, "[^[:alnum:]]" ))
+}
+
+Quant_FPKM[-interesect]
+
+length(Quant_FPKM[interesect])/length(Quant_DESEQ)*100
+```
+
+On a 71% des gènes TS très fréquemment réexprimés avec l'analyse FPKM, qui le sont aussi avec l'analyse DESEQ (96 sur 134)
+ET 88% des gènes DESEQ
+```{r}
+library(eulerr)
+
+# Input in the form of a named numeric vector
+fit1 <- euler(c("FPKM-UQ" = length(Quant_FPKM) -length(Quant_FPKM[interesect]), 
+                "DESEQ" = length(Quant_DESEQ) - length(Quant_FPKM[interesect]), 
+                "DESEQ&FPKM-UQ" = length(Quant_FPKM[interesect])))
+
+plot(fit1, quantities=T,
+     fill = c("aquamarine4", "indianred4"),
+     lty=1:2,
+     labels=list(font=4))
+```
+
+```{r}
+quantile(CT_Freq_FPKM$Expression_CT_LUSC_Tum, 0.9)
+quantile(CT_Freq_FPKM$Expression_CT_LUSC_Tum, 0.8)
+
+
+hist(CT_Freq_FPKM$Expression_CT_LUSC_Tum[which(is.element(Quant_FPKM[-interesect], CT_Freq_FPKM$Names)==TRUE)],
+     10)
+```
+
+##Intersection dernier decile
+
+
+```{r}
+
+Quant_FPKM = CT_Freq_FPKM$Names[which(CT_Freq_FPKM$Expression_CT_LUSC_Tum <= quantile(CT_Freq_FPKM$Expression_CT_LUSC_Tum, 0.25))]
+
+Quant_DESEQ =  CT_Freq_DESEQ$Names.value[which(CT_Freq_DESEQ$Expression_CT_LUSC_Tum <= quantile(CT_Freq_DESEQ$Expression_CT_LUSC_Tum, 0.25))]
+
+interesect = NULL
+for (i in seq_along(Quant_DESEQ)) {
+  interesect = c(interesect,
+                 grep(Quant_DESEQ[i], Quant_FPKM, "[^[:alnum:]]" ))
+}
+
+
+# Input in the form of a named numeric vector
+fit1 <- euler(c("FPKM-UQ" = length(Quant_FPKM) -length(Quant_FPKM[interesect]), 
+                "DESEQ" = length(Quant_DESEQ) - length(Quant_FPKM[interesect]), 
+                "DESEQ&FPKM-UQ" = length(Quant_FPKM[interesect])))
+
+plot(fit1, quantities=T,
+     fill = c("aquamarine4", "indianred4"),
+     lty=1:2,
+     labels=list(font=4))
+
+```
+
+```{r}
+data = data.frame(values = c(CT_Freq_DESEQ$Expression_CT_LUSC_Tum*100, 
+                             CT_Freq_FPKM$Expression_CT_LUSC_Tum*100),
+                  ind = c(rep("DESEQ", length(CT_Freq_DESEQ$Expression_CT_LUSC_Tum)),
+                          rep("FPKM-UQ", length(CT_Freq_FPKM$Expression_CT_LUSC_Tum))))
+
+library(ggplot2)
+P1 = ggplot(data=data, 
+         aes(x=values, fill=ind))+
+    geom_density(alpha=0.4, size=1.5)+
+    scale_fill_manual(values=c("indianred4", "aquamarine4"))+
+  labs(title=NULL, y="Density",x="Freq activation TS (%)",cex=14)+
+  theme_classic()+ 
+ theme(plot.title = element_text(NULL),
+              text=element_text(),
+              axis.title = element_text(face="bold"),
+              axis.text.x=element_text(angle=45, hjust=1,colour="black", size = 12),
+              axis.text.y=element_text(colour="black", size = 12))+
+    guides(fill=FALSE)
+
+P2 = ggplot(data=data, 
+         aes(x=values, fill=ind))+
+    geom_density(alpha=1, size=1.5)+
+  facet_grid(ind ~ .)+
+    scale_fill_manual(values=c("indianred4", "aquamarine4"))+
+  labs(title=NULL, y="Density",x="Freq activation TS (%)",cex=14)+
+  theme_classic()+ 
+ theme(plot.title = element_text(NULL),
+              text=element_text(),
+              axis.title = element_text(face="bold"),
+              axis.text.x=element_text(angle=45, hjust=1,colour="black", size = 12),
+              axis.text.y=element_text(colour="black", size = 12))
+
+g= grid.arrange(P1, P2,
+             ncol=2, nrow=1)
+ggsave(paste(pathRes,"/TS_freq.eps", sep=""), device=cairo_ps, g)
+```
+
+#Tum freque
+```{r}
+Tum_Freq_FPKM = read.table("C:/Users/marth/Desktop/These_Marthe/1_Bioinfo/181115_TCGApostSeminaire/Results_FPKM/Table_Tum_Freq_FPKM.txt", h = T, sep = "\t" )
+head(Tum_Freq_FPKM)
+
+Tum_Freq_DESEQ = read.table("C:/Users/marth/Desktop/These_Marthe/1_Bioinfo/181115_TCGApostSeminaire/Results_DESEq2/Table_Tum_Freq_DESEQ.txt", h = T, sep = "\t" )
+head(Tum_Freq_DESEQ)
+```
+
+```{r}
+data = data.frame(values = c(subset(Tum_Freq_DESEQ, CancerType == "LUSC")$values*100, 
+                             subset(Tum_Freq_FPKM, CancerType == "LUSC")$values*100),
+                  ind = c(rep("DESEQ", length(subset(Tum_Freq_DESEQ, CancerType == "LUSC")$values)),
+                          rep("FPKM-UQ", length(subset(Tum_Freq_FPKM, CancerType == "LUSC")$values))))
+
+library(ggplot2)
+P1 = ggplot(data=data, 
+         aes(x=values, fill=ind))+
+    geom_density(alpha=0.4, size=1.5)+
+    scale_fill_manual(values=c("indianred4", "aquamarine4"))+
+  labs(title=NULL, y="Density",x="Freq activation TS (%)",cex=14)+
+  theme_classic()+ 
+ theme(plot.title = element_text(NULL),
+              text=element_text(),
+              axis.title = element_text(face="bold"),
+              axis.text.x=element_text(angle=45, hjust=1,colour="black", size = 12),
+              axis.text.y=element_text(colour="black", size = 12))+
+    guides(fill=FALSE)
+
+P2 = ggplot(data=data, 
+         aes(x=values, fill=ind))+
+    geom_density(alpha=1, size=1.5)+
+  facet_grid(ind ~ .)+
+    scale_fill_manual(values=c("indianred4", "aquamarine4"))+
+  labs(title=NULL, y="Density",x="Freq Tumeurs (%)",cex=14)+
+  theme_classic()+ 
+ theme(plot.title = element_text(NULL),
+              text=element_text(),
+              axis.title = element_text(face="bold"),
+              axis.text.x=element_text(angle=45, hjust=1,colour="black", size = 12),
+              axis.text.y=element_text(colour="black", size = 12))
+
+g= grid.arrange(P1, P2,
+             ncol=2, nrow=1)
+ggsave(paste(pathRes,"/Tumeur_freq.eps", sep=""), device=cairo_ps, g)
+```
+
+##Premier decile
+
+```{r}
+Quant_FPKM =  subset(Tum_Freq_FPKM, CancerType == "LUSC")[which(subset(Tum_Freq_FPKM, CancerType == "LUSC")$values >= quantile(subset(Tum_Freq_FPKM, CancerType == "LUSC")$values, 0.75)),]
+
+
+Quant_DESEQ =  subset(Tum_Freq_DESEQ, CancerType == "LUSC")[which(subset(Tum_Freq_DESEQ, CancerType == "LUSC")$values >= quantile(subset(Tum_Freq_DESEQ, CancerType == "LUSC")$values, 0.75)),]
+
+length(Quant_DESEQ)
+
+interesect = intersect(Quant_FPKM$Names, Quant_DESEQ$Names)
+
+
+length(interesect)/length(Quant_DESEQ$Names  )*100
+# Input in the form of a named numeric vector
+fit1 <- euler(c("FPKM-UQ" = length(Quant_FPKM$Names) -length(interesect), 
+                "DESEQ" = length(Quant_DESEQ$Names) - length(interesect), 
+                "DESEQ&FPKM-UQ" = length(interesect)))
+
+plot(fit1, quantities=T,
+     fill = c("aquamarine4", "indianred4"),
+     lty=1:2,
+     labels=list(font=4))
+```
+```{r}
+quantile(subset(Tum_Freq_FPKM, CancerType == "LUSC")$values)
+quantile(subset(Tum_Freq_DESEQ, CancerType == "LUSC")$values)
+
+length(subset(Tum_Freq_FPKM, CancerType == "LUSC")$values)
+length(subset(Tum_Freq_DESEQ, CancerType == "LUSC")$values)
+
+```
+
+
+##Dernier décile
+```{r}
+Quant_FPKM =  subset(Tum_Freq_FPKM, CancerType == "LUSC")[which(subset(Tum_Freq_FPKM, CancerType == "LUSC")$values <= quantile(subset(Tum_Freq_FPKM, CancerType == "LUSC")$values, 0.25)),]
+
+
+Quant_DESEQ =  subset(Tum_Freq_DESEQ, CancerType == "LUSC")[which(subset(Tum_Freq_DESEQ, CancerType == "LUSC")$values <= quantile(subset(Tum_Freq_DESEQ, CancerType == "LUSC")$values, 0.25)),]
+
+length(Quant_DESEQ)
+
+interesect = intersect(Quant_FPKM$Names, Quant_DESEQ$Names)
+
+
+length(interesect)/length(Quant_DESEQ$Names  )*100
+# Input in the form of a named numeric vector
+fit1 <- euler(c("FPKM-UQ" = length(Quant_FPKM$Names) -length(interesect), 
+                "DESEQ" = length(Quant_DESEQ$Names) - length(interesect), 
+                "DESEQ&FPKM-UQ" = length(interesect)))
+
+plot(fit1, quantities=T,
+     fill = c("aquamarine4", "indianred4"),
+     lty=1:2,
+     labels=list(font=4))
+```
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+

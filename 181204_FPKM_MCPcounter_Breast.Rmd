@@ -1,0 +1,1416 @@
+---
+title: "R Notebook"
+output: html_notebook
+---
+
+#Intro
+```{r}
+load("C:/Users/marth/Desktop/These_Marthe/1_Bioinfo/181115_TCGApostSeminaire/TCGA_FPKM-UQ_4CancerTypes.RData")
+```
+
+
+##Paths
+```{r}
+pathData = "C:/Users/marth/Desktop/These_Marthe/1_Bioinfo/180814_TCGA_All4"
+pathRes = "C:/Users/marth/Desktop/These_Marthe/1_Bioinfo/181115_TCGApostSeminaire/Results_FPKM"
+```
+
+##libariries
+```{r}
+library(SummarizedExperiment)
+
+library(psych)
+
+library(ggplot2)
+library(gridExtra)
+library(ComplexHeatmap)
+library(circlize)
+
+library(ggrepel)
+
+library(MCPcounter)
+
+
+library(randomForest)
+
+library(parallel)
+library(doParallel)
+
+library(caret)
+library(Hmisc)
+
+```
+
+##Data
+
+```{r}
+load("C:/Users/marth/Desktop/These_Marthe/1_Bioinfo/181115_TCGApostSeminaire/181207_ImmunoBreast.RData")
+```
+
+
+```{r}
+TSPS=read.table(file="C:/Users/marth/Desktop/These_Marthe/1_Bioinfo/documents/Data_TSPS_fromRousseau.txt", h=T, sep="\t")
+CT_Wang=read.table(file="C:/Users/marth/Desktop/These_Marthe/1_Bioinfo/documents/CT_list_Wang.txt", h=T, sep="\t", dec=",")
+CT_Database=read.table(file="C:/Users/marth/Desktop/These_Marthe/1_Bioinfo/documents/data_CTA_list_from_CT_database.txt", h=T, sep="\t", dec=",")
+#réunion des trois listes
+CT=data.frame(Description=c(as.character(TSPS$Gene_Symbol),
+                            as.character(CT_Wang$Description),
+                            as.character(CT_Database$Family_member)))
+
+CT_uniq=CT$Description[-which(duplicated(CT$Description)==TRUE)]
+CT_uniq=data.frame(Description=CT_uniq)
+```
+
+##Functions
+
+```{r}
+Ma_fonction_MEAN3SD=function(X) {
+  mean(X, na.rm=T)+3*sd(X, na.rm=T)
+}
+Ma_fonction_mean=function(X) {
+  mean(X, na.rm=T)
+}
+Ma_fonction_SD=function(X) {
+  sd(X, na.rm=T)
+}
+
+vecto = function(data) {
+                 vec = NULL ; ech = NULL ; gene = NULL ; expr = NULL
+                 for (i in 1:ncol(data)) {
+                           vec = c(vec, data[,i])
+                           ech = c(ech, rep( colnames(data)[i],
+length(data[,i])) )
+                           gene = rep(row.names(data), ncol(data))
+                 }
+
+                 dt = data.frame(vec, ech, gene)
+                 dt$ech = factor(dt$ech, levels = colnames(data))
+                 dt$gene = factor(dt$gene, levels = rownames(data))
+
+         return( dt )
+}
+
+equation = function(x) {
+  lm_coef <- list(r = round(x$r[1,2], digits = 2),
+                  P = x$P[1,2]);
+  lm_eq <- substitute(bold(Pearson)*":"~~italic(R) == r*","~~italic(pvalue)~"="~P,lm_coef)
+  as.character(as.expression(lm_eq));                 
+}
+```
+
+-------------------------------------------------------------------------------------------------------
+-------------------------------------------------------------------------------------------------------
+-------------------------------------------------------------------------------------------------------
+
+#MCP Calcul
+```{r}
+data= assay(data_brca, 2)
+rownames(data) = make.names(rowData(data_brca)$gene_id, unique = TRUE)
+
+MCP_breast=MCPcounter.estimate(data,
+                    featuresType=c("HUGO_symbols"),
+                  probesets=read.table(curl("http://raw.githubusercontent.com/ebecht/MCPcounter/master/Signatures/probesets.txt"),sep="\t",stringsAsFactors=FALSE,colClasses="character"),
+        genes=read.table(curl("http://raw.githubusercontent.com/ebecht/MCPcounter/master/Signatures/genes.txt"),sep="\t",stringsAsFactors=FALSE,header=TRUE,colClasses="character",check.names=FALSE)
+)
+
+head(MCP_breast[,1:3],10)
+```
+
+```{r}
+FC_MCP_breast=MCP_breast/apply(MCP_breast[, Norm_BRCA], 1, median)
+
+```
+
+
+##Test MCP result
+```{r}
+gene_test = "CD3D"
+cell_choose = 1
+
+  
+ind_counts = grep(paste(gene_test, "[^[:alnum:]]", sep=""), rownames(assay(data_brca, 2)))[1]
+
+data = data.frame(Cell = c(MCP_breast[cell_choose, ]),
+                  Gene = c(assay(data_brca, 2)[ind_counts,])*10^6
+                  )
+
+xm = as.matrix(data[,1:2])
+M <-  rcorr(xm, type = "spearman")
+
+
+
+M$r[1,2]
+
+
+ggplot(data = data,
+       aes(x = log10(1+Gene), y = Cell))+
+  geom_point(alpha = 0.5)+
+  geom_smooth(colour = "black",fill="white", method = "loess") +
+  scale_color_manual(values=c("green4", "red4","green4"))+
+  annotate("text", x = max(log10(1+ data$Gene)) - 2, 
+           y = max(data$Cell), label = equation(M), parse = TRUE)+
+ # scale_x_continuous(limits = c(0, max(log10(1+Spm_BRCA2$Mean_ON), na.rm = T))) +
+  labs(title=NULL, x="Log10 Gene",y="Cell",cex=14)+
+  theme_classic()+ 
+ theme(plot.title = element_text(NULL),
+              text=element_text(),
+              axis.title = element_text(face="bold"),
+              axis.text.x=element_text(angle=45, hjust=1,colour="black", size = 12),
+              axis.text.y=element_text(colour="black", size = 12))
+```
+
+Ok ca marche bien. Maintenant on doit standardiser ces données pour pouvoir chercher des règles 
+
+###High / LOw
+
+```{r}
+High_Tum_TN = intersect(which(Subtype=="Basal"),
+                        which(Sum_CT_BRCA >= High_TN))
+Low_Tum_TN = intersect(which(Subtype=="Basal"), 
+                       which(Sum_CT_BRCA <= Low_TN))
+
+cell_choose = 3
+
+data_plot = data.frame(Infiltrat = c(MCP_breast[cell_choose, Norm_BRCA],
+                                     MCP_breast[cell_choose, -c(Norm_BRCA,Tum_brca_TN)],
+                                     MCP_breast[cell_choose, High_Tum_TN],
+                                     MCP_breast[cell_choose,Low_Tum_TN]),
+                       Class = c(rep("NT", length(Norm_BRCA)),
+                                 rep("Tum", length(Tum_BRCA)-length(Tum_brca_TN)),
+                                 rep("High", length(High_Tum_TN)),
+                                 rep("Low", length(Low_Tum_TN))))
+
+ggplot(data = data_plot, aes(x = Class, y = log2(Infiltrat), fill = Class))+
+  geom_boxplot(notch = TRUE)+
+  scale_fill_manual(values = c("indianred4", "cyan4", "white", "grey"))+
+  scale_x_discrete(limits = c("NT","Tum", "High", "Low"))+
+  labs(title="Total infiltrat", y="FC Cells",x="Tumor subtypes",cex=14)+
+  theme_classic()+ 
+ theme(plot.title = element_text(face = "bold", hjust = 0.5, size = 12) ,
+              text=element_text(),
+              axis.title = element_text(face="bold"),
+              axis.text.x=element_text(angle=45, hjust=1,colour="black", size = 12),
+              axis.text.y=element_text(colour="black", size = 12),
+      legend.position="none")
+```
+
+```{r}
+liste = list()
+for (i in c(1:10)) {
+  data_plot = data.frame(Infiltrat = c(MCP_breast[i, Norm_BRCA],
+                                     MCP_breast[i, -c(Norm_BRCA,Tum_brca_TN)],
+                                     MCP_breast[i, High_Tum_TN],
+                                     MCP_breast[i,Low_Tum_TN]),
+                       Class = c(rep("NT", length(Norm_BRCA)),
+                                 rep("Tum", length(Tum_BRCA)-length(Tum_brca_TN)),
+                                 rep("High", length(High_Tum_TN)),
+                                 rep("Low", length(Low_Tum_TN))))
+  fit = aov(Infiltrat ~ Class, data = data_plot)
+  fit
+  liste = c(liste, list(TukeyHSD(fit)))
+}
+```
+
+
+##Rescal
+```{r}
+	#Standardization
+Ma_function_Standardization=function(X) {
+  X=c((X-mean(X, na.rm=T))/sd(X, na.rm=T))
+}
+#Mean normalization
+Ma_function_MeanNormalization=function(X) {
+  X=c((X-mean(X, na.rm=T))/(max(X, na.rm = T)-min(X, na.rm=T)))
+}
+#Min Max Normalisation (feature rescalling)
+Ma_function_rescale=function(X) {
+  X=c(X/(max(X, na.rm = T)-min(X, na.rm=T)))
+}
+#scale() calcule un Z score
+```
+
+Créer un emplacement vide
+```{r}
+blankPlot <- ggplot()+geom_blank(aes(1,1))+
+  theme(
+    plot.background = element_blank(), 
+   panel.grid.major = element_blank(),
+   panel.grid.minor = element_blank(), 
+   panel.border = element_blank(),
+   panel.background = element_blank(),
+   axis.title.x = element_blank(),
+   axis.title.y = element_blank(),
+   axis.text.x = element_blank(), 
+   axis.text.y = element_blank(),
+   axis.ticks = element_blank(),
+   axis.line = element_blank()
+     )
+```
+
+
+```{r}
+gene_test = "CD3D"
+cell_choose = 1
+
+  
+ind_counts = grep(paste(gene_test, "[^[:alnum:]]", sep=""), rownames(assay(data_brca, 2)))[1]
+
+data_test = data.frame(Cell = c(MCP_breast[cell_choose, ]),
+                  Gene =c(assay(data_brca, 2)[ind_counts,]*10^6)
+                  )
+
+#Standardization
+for (i in c(1:dim(data_test)[2])) {
+  data_test[,i] = Ma_function_Standardization(data_test[,i])
+}
+
+
+xm = as.matrix(data_test[,1:2])
+M <-  rcorr(xm, type = "spearman")
+
+
+
+M$r[1,2]
+
+
+ydensity <- ggplot(data_test, aes(Cell)) + 
+  geom_density(alpha=.5) + 
+  scale_fill_manual(values = c('#999999')) + 
+  theme(legend.position = "none")+
+  theme_classic()+ 
+ theme(plot.title = element_text(NULL),
+              text=element_text(),
+              axis.title = element_text(face="bold"),
+              axis.text.x=element_text(angle=45, hjust=1,colour="black", size = 12),
+              axis.text.y=element_text(colour="black", size = 12))
+
+xdensity <- ggplot(data_test, aes(Gene)) + 
+  geom_density(alpha=.5) + 
+  scale_fill_manual(values = c('#E69F00')) + 
+  theme(legend.position = "none")+
+  theme_classic()+ 
+ theme(plot.title = element_text(NULL),
+              text=element_text(),
+              axis.title = element_text(face="bold"),
+              axis.text.x=element_text(angle=45, hjust=1,colour="black", size = 12),
+              axis.text.y=element_text(colour="black", size = 12))
+
+corr = ggplot(data = data_test,
+       aes(x = Gene, y = Cell))+
+  geom_point(alpha = 0.5)+
+  geom_smooth(colour = "black",fill="white", method = "loess") +
+  scale_color_manual(values=c("green4", "red4","green4"))+
+  annotate("text", x = 0, 
+           y = max(data_test$Cell), label = equation(M), parse = TRUE)+
+ # scale_x_continuous(limits = c(0, max(log10(1+Spm_BRCA2$Mean_ON), na.rm = T))) +
+  labs(title=NULL, x="Gene",y="Cell",cex=14)+
+  theme_classic()+ 
+ theme(plot.title = element_text(NULL),
+              text=element_text(),
+              axis.title = element_text(face="bold"),
+              axis.text.x=element_text(angle=45, hjust=1,colour="black", size = 12),
+              axis.text.y=element_text(colour="black", size = 12))
+
+library("gridExtra")
+grid.arrange(xdensity, blankPlot, corr, ydensity, 
+        ncol=2, nrow=2, widths=c(4, 1.4), heights=c(1.4, 4))
+```
+
+
+On a ainsi centré réduit nos variables:
+on utilise les datas : 
+- data_brca_scale
+- MCP_breast_scale
+
+
+
+
+
+
+
+-------------------------------------------------------------------------------------------------------
+-------------------------------------------------------------------------------------------------------
+-------------------------------------------------------------------------------------------------------
+
+#Corr Mono
+##Test
+
+```{r}
+gene_test = "HORMAD1"
+cell_choose = 3#
+
+ind = grep(paste(gene_test, "[^[:alnum:]]", sep=""), rownames(EE_CT_BRCA))[1]
+ind_counts = grep(paste(gene_test, "[^[:alnum:]]", sep=""), rownames(assay(data_brca, 2)))[1]
+
+data_test = data.frame(Cell = c(MCP_breast[cell_choose, which(EE_CT_BRCA[ind,]==1)],
+                          MCP_breast[cell_choose, which(EE_CT_BRCA[ind,]==0)]),
+                  Type = c(rep("ON",length(which(EE_CT_BRCA[ind,]==1))),
+                           rep("OFF",length(which(EE_CT_BRCA[ind,]==0)))),
+                  Gene = c(assay(data_brca,2)[ind_counts,which(EE_CT_BRCA[ind,]==1)],
+                           assay(data_brca, 2)[ind_counts,which(EE_CT_BRCA[ind,]==0)])
+                  )
+
+
+#Standardization
+for (i in c(1,3)) {
+  data_test[,i] = Ma_function_Standardization(data_test[,i])
+}
+
+
+#head(data)
+
+xm = as.matrix(data_test[,c(1,3)])
+#head(xm[,])
+library("Hmisc")
+
+M <-  rcorr(xm, type = "spearman")
+
+
+corr <- ggplot(data = data_test,
+       aes(x = Gene, y = Cell, color = Type))+
+  geom_point(alpha = 0.5)+
+ # geom_smooth(colour = "black",fill="white", method = "loess") +
+  scale_color_manual(values=c("green4", "red4","green4"))+
+  annotate("text", x = 10, 
+           y = max(data_test$Cell), label = equation(M), parse = TRUE)+
+  labs(title=paste(gene_test), x="Log10 Gene",y="Cell",cex=14)+
+  theme_classic()+ 
+ theme(plot.title = element_text(hjust=0.5,colour="black", size = 12),
+              text=element_text(),
+              axis.title = element_text(face="bold"),
+              axis.text.x=element_text(angle=45, hjust=1,colour="black", size = 12),
+              axis.text.y=element_text(colour="black", size = 12))
+
+
+ydensity <- ggplot(data_test, aes(Cell)) + 
+  geom_density(alpha=.5) + 
+  scale_fill_manual(values = c('#999999')) + 
+  theme(legend.position = "none")+
+  theme_classic()+ 
+ theme(plot.title = element_text(NULL),
+              text=element_text(),
+              axis.title = element_text(face="bold"),
+              axis.text.x=element_text(angle=45, hjust=1,colour="black", size = 12),
+              axis.text.y=element_text(colour="black", size = 12))
+
+xdensity <- ggplot(data_test, aes(Gene)) + 
+  geom_density(alpha=.5) + 
+  scale_fill_manual(values = c('#E69F00')) + 
+  theme(legend.position = "none")+
+  theme_classic()+ 
+ theme(plot.title = element_text(NULL),
+              text=element_text(),
+              axis.title = element_text(face="bold"),
+              axis.text.x=element_text(angle=45, hjust=1,colour="black", size = 12),
+              axis.text.y=element_text(colour="black", size = 12))
+
+grid.arrange(xdensity, blankPlot, corr, ydensity, 
+        ncol=2, nrow=2, widths=c(4, 1.4), heights=c(1.4, 4))
+```
+##Automated
+```{r}
+Corr = c(NA)
+
+gene_test = rownames(subset(Spm_BRCA2, Spm_BRCA2$SPM > 0.999 & Spm_BRCA2$T.test_zero <=0.01 & Spm_BRCA2$Mean_ON >=1))
+cell_choose = 3
+
+#On calcule les corrélation pour chaque TS choisi
+for (i in seq_along(gene_test)) {
+  
+ind = grep(paste(gene_test[i], "[^[:alnum:]]", sep=""), rownames(EE_CT_BRCA))[1] #ID row EE_CT
+ind_counts = grep(paste(gene_test[i], "[^[:alnum:]]", sep=""),                   #ID row FPKM
+                  rownames(assay(data_brca, 2)))[1]                      
+
+#Data pour ce gène
+data = data.frame(Cell = c(MCP_breast[cell_choose, ]),
+                  Gene = c(assay(data_brca, 2)[ind_counts,])
+                  )
+  #Standardization pour ce gène
+  for (j in c(1,2)) {
+    data[,j] = Ma_function_Standardization(data[,j])
+  }
+
+#Calcul des corrélations gène TS / Cell
+xm = as.matrix(data[,1:2])
+M <-  rcorr(xm, type = "spearman")
+
+#On sauve et on implémente
+Corr = c(Corr, M$r[1,2])
+names(Corr)[i + 1] = gene_test[i]
+
+}
+
+hist(Corr)
+```
+```{r}
+tail(sort(Corr), 20)
+```
+
+
+==> On n'a pas de TS sortant de manière évidente avec une régression linéaire mono-paramétrique
+
+
+```{r}
+Corr_All = c(NA)
+
+gene_test = rownames(Spm_BRCA2)
+cell_choose = 1
+
+
+for (i in seq_along(gene_test)) {
+  
+ind_counts = grep(paste(gene_test[i], "[^[:alnum:]]", sep=""), rownames(data_brca_scale))[1]
+
+data = data.frame(Cell = c(MCP_breast_scale[cell_choose, ]),
+                  Gene = c(data_brca_scale[ind_counts,])*10^6
+                  )
+
+xm = as.matrix(data[,1:2])
+M <-  rcorr(xm, type = "spearman")
+
+Corr_All = c(Corr_All, M$r[1,2])
+names(Corr_All)[i + 1] = gene_test[i]
+
+}
+
+hist(Corr_All)
+```
+```{r}
+tail(sort(Corr_All), 10)
+```
+ZNF =  tissue-resident T-cell transcription regulator
+ebi3 = IL27 precu
+
+==> Apparaisse comme fortement corrélé des gènes qui sont à première vue de "faux-TS", exprimés par les cellules immuno
+
+On va tester des modèles de data mining plus sophistiqués
+
+#Data Pour les modèles d'apprentissage
+```{r}
+gene_test = rownames(subset(Spm_BRCA2, Spm_BRCA2$SPM > 0.999 & Spm_BRCA2$T.test_zero <=0.01 & Spm_BRCA2$Mean_ON >=1))
+cell_choose = 3
+
+
+#Initialisation
+ind_counts = NULL
+ind = NULL
+
+#Selection des indices des lignes
+for (i in seq_along(gene_test)) {
+  ind_counts = c(ind_counts, grep(paste(gene_test[i], "[^[:alnum:]]", sep=""),
+                                rownames(assay(data_brca, 2)))[1])
+}
+
+#Suppression du cas : lignes = NA
+if (is.na(ind_counts)==TRUE) {
+  ind_counts  = ind_counts[-which(is.na(ind_counts)==TRUE)]
+} else {
+  ind_counts = ind_counts
+}
+
+#on assemble les données
+data = cbind(data.frame(Cell = c(MCP_breast[cell_choose, ])),
+                    #t(EE_CT_BRCA[ind,])
+                    t(assay(data_brca, 2)[ind_counts,])
+                  )
+dim(data)
+
+#Standardization des data
+for (j in c(1,dim(data)[2])) {
+    data[,j] = Ma_function_Standardization(data[,j])
+}
+
+
+#for (i in c(2:dim(data)[2])) {data[,i] = as.factor(data[,i]) }
+
+#colnames(data) = c("Cell", gene_test)
+head(data[,1:3])
+```
+
+Les mesures sont relativement répétitives après scales
+
+
+#Reg lin multiples
+```{r}
+reg <-lm(Cell ~ ., data = data)
+
+summary(reg)
+```
+```{r}
+plot(reg$coefficients)
+```
+
+
+
+
+```{r}
+confint(reg)
+confint_bar <-function(x){
+df <-data.frame(confint(x))
+colnames(df) <-list("b_inf", "b_sup")
+df$variable <-rownames(df)
+rownames(df) <-NULL
+df$coef <-coef(x)
+
+ggplot(df,aes(x =factor(1), y = coef)) +
+geom_errorbar(aes(ymin = b_inf, ymax = b_sup)) +
+  geom_point(col = "dodger blue", size = 3) +
+geom_hline(yintercept = 0, linetype = "dashed") +
+facet_wrap(~variable, scales = "free_y") +xlab("") +
+theme(axis.ticks =element_blank(),axis.text.x =element_blank())
+}
+confint_bar(reg)
+```
+```{r}
+all.equal(predict(reg),fitted(reg))
+```
+
+```{r}
+library(texreg)
+# htmlreg(reg_3, digits = 2, caption = "Résultats de la régression")
+# texreg(reg_3, digits = 2, caption = "Résultats de la régression")
+# En enregistrant
+htmlreg(reg, file = "regCyto_FPKM.html")
+```
+##GLM avec Caret
+https://github.com/ledell/useR-machine-learning-tutorial/blob/master/generalized-linear-models.ipynb
+```{r}
+set.seed(1)
+idxs <- caret::createDataPartition(y = data$Cell, p = 0.75)[[1]]
+train <- data[idxs,]
+test <- data[-idxs,]
+```
+
+
+
+```{r}
+fit <- glm(Cell ~ ., 
+           data = data, 
+           family = gaussian())
+#summary(fit)
+
+library(jtools)
+summ(fit)
+```
+```{r}
+effect_plot(fit, pred = Illiteracy, interval = TRUE, plot.points = TRUE,
+            robust = "HC3")
+```
+
+
+
+```{r}
+sapply(fit$xlevels, function(x) print(length(x)))
+plot(fit)
+```
+
+
+  The Residuals vs Fitted plot can help you see, for example, if there are curvilinear trends that you missed. But the fit of a logistic regression is curvilinear by nature, so you can have odd looking trends in the residuals with nothing amiss.
+  
+  The Normal Q-Q plot helps you detect if your residuals are normally distributed. But the deviance residuals don't have to be normally distributed for the model to be valid, so the normality / non-normality of the residuals doesn't necessarily tell you anything.
+    The Scale-Location plot can help you identify heteroscedasticity. But logistic regression models are pretty much heteroscedastic by nature.
+    The Residuals vs Leverage can help you identify possible outliers. But outliers in logistic regression don't necessarily manifest in the same way as in linear regression, so this plot may or may not be helpful in identifying them.
+
+
+
+##Lasso GLM
+```{r}
+
+
+# h2o.glm example
+#install.packages("h2o")
+library(h2o)
+h2o.init(nthreads = -1)
+
+sac <- as.h2o(data)
+
+# Split the data into a 70/25% train/test sets
+set.seed(1)
+idxs <- caret::createDataPartition(y = data$Cell, p = 0.75)[[1]]
+train <- sac[idxs,]
+test <- sac[-idxs,]
+
+# Identify the predictor columns
+xcols <- setdiff(names(train), "Cell")
+
+system.time(fit <- h2o.glm(x = xcols,
+                           y = "Cell",
+                           training_frame = train,
+                           family = "gaussian",
+                           lambda_search = TRUE,  # compute lasso path
+                           alpha = 1))  # alpha = 1 means lasso, same as glmnet above
+```
+```{r}
+summary(fit) 
+dd = h2o.varimp(fit)
+View(dd)
+
+
+write.table(dd, 
+            paste(pathRes, "/GLM_ElasticNet.txt", sep=""), 
+            sep = "\t", quote = FALSE,  row.names = FALSE)
+# Compute AUC on test dataset
+# H2O computes many model performance metrics automatically, including AUC
+
+perf <- h2o.performance(model = fit,
+                        newdata = test)
+h2o.mse(perf)
+
+```
+
+
+
+
+##DeepLearning
+https://github.com/ledell/useR-machine-learning-tutorial/blob/master/deep-neural-networks.ipynb
+```{r}
+
+# h2o.glm example
+#install.packages("h2o")
+library(h2o)
+h2o.init(nthreads = -1)
+
+# Split the data into a 70/25% train/test sets
+set.seed(1)
+
+
+# Convert the data into an H2OFrame
+train <- as.h2o(data)
+
+splits <- h2o.splitFrame(train, 0.75, seed=1234)
+
+y <- "Cell"
+x <- setdiff(names(train), y)
+
+# We encode the response column as categorical for multinomial classification
+train[,y] <- as.factor(train[,y])
+test[,y] <- as.factor(test[,y])
+
+# Train an H2O Deep Learning model
+
+model <- h2o.deeplearning(x = x, 
+                          y = y, 
+                          training_frame = train,
+                          sparse = TRUE,  #speed-up on sparse data (like MNIST)
+                          distribution = "gaussian",
+                          activation = "Rectifier", 
+                          hidden = c(128,64),
+                          epochs = 10)
+
+# Get model performance on a test set
+perf <- h2o.performance(model, test)
+
+# Or get the preds directly and compute classification accuracy
+preds <- h2o.predict(model, newdata = test)
+acc <- sum(test[,y] == preds$predict)/nrow(test)
+print(acc)
+```
+
+
+
+
+
+
+
+
+
+##RandomForest
+```{r}
+# detectCores : Find out how many cores are available (if you don't already know)
+#makeCluster :  Create cluster with desired number of cores
+cluster <- makeCluster(detectCores() - 1) # convention to leave 1 core for OS
+registerDoParallel(cluster) # Register cluster
+
+# Find out how many cores are being used
+getDoParWorkers()
+
+set.seed(95014)
+
+#Defaut
+fitControl <- trainControl(method = "cv", number = 5, allowParallel = TRUE)
+
+
+mod_Cyto <- train(Cell ~ ., data = data, method = "rf",
+             trControl = fitControl,importance=T)
+
+# Random Search
+control <- trainControl(method="repeatedcv", number=10, 
+                        repeats=3, search="random", allowParallel = TRUE)
+
+mtry <- sqrt(ncol(data[, -1]))
+
+rf_random <- train(Cell~., data=data, method="rf",  
+                   tuneLength=15, trControl=control)
+print(rf_random)
+plot(rf_random)
+
+stopCluster(cluster)
+registerDoSEQ() 
+```
+```{r}
+mod_Cyto
+```
+```{r}
+
+
+
+matplot(1:mtry , cbind(oob.err,test.err), pch=19 , col=c("red","blue"),type="b",ylab="Mean Squared Error",xlab="Number of Predictors Considered at each Split")
+legend("topright",legend=c("Out of Bag Error","Test Error"),pch=19, col=c("red","blue"))
+
+```
+
+```{r}
+print(mod_Cyto$finalModel)
+
+varImpPlot(mod_Cyto$finalModel, 
+           n.var=min(40, nrow(mod_Cyto$importance)),
+           cex=0.5)
+
+```
+
+```{r}
+varImp(mod_Cyto)
+
+plot(varImp(mod_Cyto), top = 30)
+```
+
+
+
+###Pre-process
+
+
+   dummyVars: creating dummy variables from categorical variables with multiple categories
+
+   nearZeroVar: identifying zero- and near zero-variance predictors (these may cause issues when subsampling)
+
+  findCorrelation: identifying correlated predictors
+
+   findLinearCombos: identify linear dependencies between predictors
+
+
+```{r}
+# center, scale and perform a YeoJohnson transformation
+# identify and remove variables with near zero variance
+# perform pca
+abalone_no_nzv_pca <- preProcess(data[,], 
+                        method = c("center", "scale", "nzv", "pca"))
+abalone_no_nzv_pca
+
+# transform the dataset using the parameters
+transformed <- predict(abalone_no_nzv_pca, data)
+# summarize the transformed dataset
+summary(transformed)
+
+
+#makeCluster :  Create cluster with desired number of cores
+cluster <- makeCluster(detectCores() - 1) # convention to leave 1 core for OS
+registerDoParallel(cluster) # Register cluster
+
+# Find out how many cores are being used
+getDoParWorkers()
+
+set.seed(95014)
+
+#Defaut
+fitControl <- trainControl(method = "cv", number = 5, allowParallel = TRUE)
+
+
+mod_Cyto <- train(Cell ~ ., data = data, method = "rf",
+             trControl = fitControl,importance=T)
+
+
+print(mod_Cyto)
+plot(mod_Cyto)
+
+stopCluster(cluster)
+registerDoSEQ() 
+
+```
+```{r}
+# identify the principal components
+abalone_no_nzv_pca$rotation
+```
+
+
+
+
+
+
+
+
+
+
+```{r}
+plot(Cell ~ Gene.LALBA.3906, data = data)
+```
+
+```{r}
+plot(mod_Cyto$err.rate[, 1], type = "l", xlab = "nombre d'arbres", ylab = "erreur OOB")
+```
+
+
+
+##Extend Caret
+```{r}
+customRF <- list(type = "Classification", library = "randomForest", loop = NULL)
+customRF$parameters <- data.frame(parameter = c("mtry", "ntree"), class = rep("numeric", 2), label = c("mtry", "ntree"))
+customRF$grid <- function(x, y, len = NULL, search = "grid") {}
+customRF$fit <- function(x, y, wts, param, lev, last, weights, classProbs, ...) {
+  randomForest(x, y, mtry = param$mtry, ntree=param$ntree, ...)
+}
+customRF$predict <- function(modelFit, newdata, preProc = NULL, submodels = NULL)
+   predict(modelFit, newdata)
+customRF$prob <- function(modelFit, newdata, preProc = NULL, submodels = NULL)
+   predict(modelFit, newdata, type = "prob")
+customRF$sort <- function(x) x[order(x[,1]),]
+customRF$levels <- function(x) x$classes
+
+
+#Parralale
+
+cluster <- makeCluster(detectCores() - 1) # convention to leave 1 core for OS
+registerDoParallel(cluster) # Register cluster
+
+# Find out how many cores are being used
+getDoParWorkers()
+
+# train model
+control <- trainControl(method="repeatedcv", number=10, repeats=3, allowParallel = TRUE)
+tunegrid <- expand.grid(.mtry=c(1:15), .ntree=c(1000, 1500, 2000, 2500))
+
+set.seed(123)
+
+custom <- train(Cell~., data=data, method=customRF,  tuneGrid=tunegrid, trControl=control)
+summary(custom)
+plot(custom)
+
+```
+
+-------------------------------------------------------------------------------------------------------
+-------------------------------------------------------------------------------------------------------
+------------------------------------------------------------------------------------------------------
+-
+#Bindea
+```{r}
+
+imm2015=read.table(file="C:/Users/marth/Desktop/These_Marthe/1_Bioinfo/171001_Signatures immuno/Galon2015.txt", header=TRUE, sep="\t")
+
+gene_sub = unique(rowData(data_brca)$gene_id[which(is.element(rowData(data_brca)$gene_id,
+                                                              imm2015$Name)==T)])
+
+ind_counts = NULL
+#Selection des indices des lignes
+for (i in seq_along(gene_sub)) {
+  ind_counts = c(ind_counts, grep(paste(gene_sub[i], "[^[:alnum:]]", sep=""),
+                                rownames(assay(data_brca, 2)))[1])
+}
+#ind_counts = ind_counts[-which(is.na(ind_counts)==TRUE)]
+ind_counts = ind_counts[- which(duplicated(ind_counts)==T)]
+
+subimm15=assay(data_brca, 2)[ind_counts,]
+rownames(subimm15) = rowData(data_brca)$gene_id[ind_counts]
+subimm15 = subimm15[-which(is.element(rownames(subimm15), imm2015$Name  )==F) ,]
+
+celltype15_2=unique(imm2015[which(is.element(imm2015$Name, rownames(subimm15) )==TRUE),])
+celltype15_2=celltype15_2[-which(duplicated(celltype15_2$Name)==TRUE),]
+
+subimm15t=subimm15[order(match(rownames(subimm15), celltype15_2$Name)),]
+#On fait une fonction mean avec Na.rm intégrée
+
+Ma_Fonction_Mean=function(x) {
+  mean(as.matrix(x), na.rm=T)
+}
+
+#On calcule un FC par gene par echantillon, par rapport au niveau d'expression moyen sur toute la population
+Moy_Bindea_NT_BRCA=apply(subimm15t, 1,Ma_Fonction_Mean )
+
+#La division par 0 est mauvaise ! On vérifie qu'in n'y a pas de moyenne égale à 0
+which( Moy_Bindea_NT_BRCA==0)
+
+#On divise par cette moyenne
+
+NormBindea_BRCA=as.matrix(subimm15t[,])/Moy_Bindea_NT_BRCA
+colnames(NormBindea_BRCA)=colnames(subimm15t[,])
+
+
+#Verif centrée sur 1
+plot(density(NormBindea_BRCA[2,]))
+
+Immunoscore_BRCA=data.frame(matrix(NA, nrow=30, ncol=c(1+dim(subimm15t[,])[2])))
+
+
+    #calculer la somme des expressions normalisées pour obtenir le nombre relatif de cellules immunitaires Ic. By fonctionne par vecteur, on l'itère sur chaque colonne
+
+Bindea_MLH_NT_avecCellType_BRCA=data.frame(celltype15_2, NormBindea_BRCA)
+
+
+#FC / NT
+for (i in seq(2,c(1+dim(subimm15t[,])[2]))) {      #pour chaque colonne-sample
+  Immunoscore_BRCA[,i]=c(by(log10(1+Bindea_MLH_NT_avecCellType_BRCA[,c(1+i)]),
+                       Bindea_MLH_NT_avecCellType_BRCA$Cell.Type,
+                       sum))
+}
+colnames(Immunoscore_BRCA)=colnames(Bindea_MLH_NT_avecCellType_BRCA)[2:dim(Bindea_MLH_NT_avecCellType_BRCA)[2]]
+Immunoscore_BRCA=Immunoscore_BRCA[,-1]#on retire la colonne 1 qui contient les cells types 
+Immunoscore_BRCA=as.matrix(Immunoscore_BRCA)
+rownames(Immunoscore_BRCA)=levels(Bindea_MLH_NT_avecCellType_BRCA$Cell.Type)
+#Calculer le FC par rapport à NT : 
+FC_Immunoscore_BRCA=Immunoscore_BRCA/apply(Immunoscore_BRCA[, Norm_BRCA], 1, median)
+
+
+Infiltrat_tot=apply(FC_Immunoscore_BRCA, 2, sum)/30
+```
+
+#Identification High / low CT
+
+```{r}
+
+gene_test = as.character(rownames(subset(Spm_BRCA2, Spm_BRCA2$SPM > 0.999 & Spm_BRCA2$T.test_zero <=0.01 & Spm_BRCA2$Mean_ON >=1)))
+
+gene_test = as.character(rownames(Spm_BRCA2))
+
+for (i in seq_along(gene_test)) {
+  
+#on trouve le gène dans la liste  
+ind = c(ind, grep(paste(gene_test[i], "[^[:alnum:]]", sep=""), rownames(EE_CT_BRCA))[1])
+}
+
+Sum_CT_BRCA=colSums(na.omit(EE_CT_BRCA[ind,]))
+hist(Sum_CT_BRCA, 100)
+```
+```{r}
+Subtype = as.factor(colData(data_brca)$subtype_BRCA_Subtype_PAM50)
+
+
+id_TN = which(Subtype=="Basal")
+Norm_brca_TN=which(colData(data_brca)$definition=="Solid Tissue Normal")
+Tum_brca_TN=intersect(which(colData(data_brca)$definition!="Solid Tissue Normal"),
+                      which(Subtype=="Basal"))
+
+Sum_CT_TN=colSums(na.omit(EE_CT_BRCA[ind,id_TN]))
+
+Mean_NT = Ma_fonction_mean(Sum_CT_BRCA[Norm_BRCA])
+Mean_TN = Ma_fonction_mean(Sum_CT_BRCA[Tum_brca_TN])
+Mean_tot = Ma_fonction_mean(Sum_CT_BRCA[Tum_BRCA])
+
+High_TN = quantile(Sum_CT_TN, 0.9)
+Low_TN = quantile(Sum_CT_TN, 0.1)
+High_Tum = quantile(Sum_CT_BRCA[Tum_BRCA], 0.9)
+Low_Tum = quantile(Sum_CT_BRCA[Tum_BRCA], 0.1)
+
+
+g1 = ggplot(data.frame(Sum_CT_BRCA[Tum_BRCA]), aes(x=Sum_CT_BRCA.Tum_BRCA.)) + 
+  geom_histogram(color="black", fill="white", binwidth = 5)+
+  scale_x_continuous(limits=c(0, max(Sum_CT_BRCA)))+
+  geom_vline(xintercept=Mean_tot,size=2, color="black")+
+  geom_vline(xintercept=High_Tum,size=2, color="indianred4", linetype = "dotted")+
+  geom_vline(xintercept=Low_Tum,size=2, color="cyan4", linetype = "dotted")+
+  labs(title="All Tumors", y="Counts",x="# Selected CT activated",cex=14)+
+  theme_classic()+ 
+ theme(plot.title = element_text(face = "bold", hjust = 0.5, size = 12) ,
+              text=element_text(),
+              axis.title = element_text(face="bold"),
+              axis.text.x=element_text(angle=45, hjust=1,colour="black", size = 12),
+              axis.text.y=element_text(colour="black", size = 12),
+      legend.position="none")
+
+g2 = ggplot(data.frame(Sum_CT_BRCA[Norm_brca_TN]), aes(x=Sum_CT_BRCA.Norm_brca_TN.)) + 
+  geom_histogram(binwidth=1,fill="goldenrod3", color="black")+
+  geom_vline(xintercept=Mean_NT,size=2, color="black")+
+  scale_x_continuous(limits=c(0, max(Sum_CT_BRCA)))+
+  labs(title="Normal tissue samples", y="Counts",x="# Selected CT activated",cex=14)+
+  theme_classic()+ 
+ theme(plot.title = element_text(face = "bold", hjust = 0.5, size = 12) ,
+              text=element_text(),
+              axis.title = element_text(face="bold"),
+              axis.text.x=element_text(angle=45, hjust=1,colour="black", size = 12),
+              axis.text.y=element_text(colour="black", size = 12),
+      legend.position="none")
+
+
+g3 = ggplot(data.frame(Sum_CT_BRCA[Tum_brca_TN]), aes(x=Sum_CT_BRCA.Tum_brca_TN.)) + 
+  geom_histogram(binwidth=5,color="black", fill="grey")+
+  scale_x_continuous(limits=c(0, max(Sum_CT_BRCA)))+
+  geom_vline(xintercept=Mean_TN,size=2, color="black")+
+  geom_vline(xintercept=High_TN,size=2, color="indianred4", linetype = "dotted")+
+  geom_vline(xintercept=Low_TN,size=2, color="cyan4", linetype = "dotted")+
+  labs(title="Basal Tumors", y="Counts",x="# Selected CT activated",cex=14)+
+  theme_classic()+ 
+ theme(plot.title = element_text(face = "bold", hjust = 0.5, size = 12) ,
+              text=element_text(),
+              axis.title = element_text(face="bold"),
+              axis.text.x=element_text(angle=45, hjust=1,colour="black", size = 12),
+              axis.text.y=element_text(colour="black", size = 12),
+      legend.position="none")
+
+
+
+
+#list de ggplot
+gs <- list(g1, g2,g3)
+
+#Layout
+hlay <- rbind(c(1,2, 3),
+              c(1,2, 3))
+select_grobs <- function(lay) {
+  id <- unique(c(t(lay))) 
+  id[!is.na(id)]
+} 
+
+grid.arrange(grobs=gs[select_grobs(hlay)], layout_matrix=hlay)
+```
+
+```{r}
+High_Tum_TN = intersect(which(Subtype=="Basal"),
+                        which(Sum_CT_BRCA >= High_TN))
+Low_Tum_TN = intersect(which(Subtype=="Basal"), 
+                       which(Sum_CT_BRCA <= Low_TN))
+
+C = 2
+data_plot = data.frame(Infiltrat = c(Infiltrat_tot[Norm_BRCA],
+                                     Infiltrat_tot[-c(Norm_BRCA,Tum_brca_TN)],
+                                     Infiltrat_tot[High_Tum_TN],
+                                     Infiltrat_tot[Low_Tum_TN]),
+                       Cell = c(t(FC_Immunoscore_BRCA[C, Norm_BRCA]),
+                                t(FC_Immunoscore_BRCA[C, -c(Tum_brca_TN,Norm_BRCA)]),
+                                t(FC_Immunoscore_BRCA[C, High_Tum_TN]),
+                                t(FC_Immunoscore_BRCA[C, Low_Tum_TN])),
+                       Class = c(rep("NT", length(Norm_BRCA)),
+                                 rep("Tum", length(Tum_BRCA)-length(Tum_brca_TN)),
+                                 rep("High", length(High_Tum_TN)),
+                                 rep("Low", length(Low_Tum_TN))))
+
+ggplot(data = data_plot, aes(x = Class, y = Cell, fill = Class))+
+  geom_boxplot(notch = TRUE)+
+  scale_fill_manual(values = c("indianred4", "cyan4", "white", "grey"))+
+  scale_x_discrete(limits = c("NT","Tum", "High", "Low"))+
+  geom_hline(yintercept=1,size=2, color="black")+
+  labs(title="Activated CD4", y="FC Cells",x="Tumor subtypes",cex=14)+
+  theme_classic()+ 
+ theme(plot.title = element_text(face = "bold", hjust = 0.5, size = 12) ,
+              text=element_text(),
+              axis.title = element_text(face="bold"),
+              axis.text.x=element_text(angle=45, hjust=1,colour="black", size = 12),
+              axis.text.y=element_text(colour="black", size = 12),
+      legend.position="none")
+```
+```{r}
+liste = list()
+for (i in c(1:30)) {
+  data_plot = data.frame(Infiltrat = c(t(FC_Immunoscore_BRCA[i, Norm_BRCA]),
+                                     t(FC_Immunoscore_BRCA[i, -c(Norm_BRCA,Tum_brca_TN)]),
+                                     t(FC_Immunoscore_BRCA[i, High_Tum_TN]),
+                                     t(FC_Immunoscore_BRCA[i,Low_Tum_TN])),
+                       Class = c(rep("NT", length(Norm_BRCA)),
+                                 rep("Tum", length(Tum_BRCA)-length(Tum_brca_TN)),
+                                 rep("High", length(High_Tum_TN)),
+                                 rep("Low", length(Low_Tum_TN))))
+  fit = aov(Infiltrat ~ Class, data = data_plot)
+  fit
+  liste = c(liste, list(TukeyHSD(fit)))
+}
+```
+
+##Heatmap
+```{r}
+A=dim(EE_CT_BRCA)[1]
+
+Histo=as.factor( colData(data_brca)$name)
+
+Type=as.factor(c(colData(data_brca)$definition))
+
+
+Stage=as.character(c(colData(data_brca)$tumor_stage))
+#on recode pour qe ce soit plus lisible
+Stage[which(is.element(Stage, c("stage i", "stage ia",   "stage ib","stage ii"  , "stage iia", "stage iib", "stage iic" ))==TRUE)]="I-II"
+Stage[which(is.element(Stage, c( "stage iii",  "stage iiia" ,"stage iiib" ,"stage iiic", "stage iv"  , "stage iva" , "stage ivb" ))==TRUE)]="III-IV"
+
+Stage[which(is.element(Type, c("NA", "Solid Tissue Normal"))==TRUE)]=NA
+Stage=as.factor(Stage)
+
+Subtype = as.factor(colData(data_brca)$subtype_BRCA_Subtype_PAM50)
+
+#Mutations=colData(data_brca)$subtype_Nonsilent.Mutations.per.M
+
+Methylation = as.factor(colData(data_brca)$subtype_DNA.Methylation.Clusters)
+
+SelectedMut = as.factor(as.character(colData(data_luad)$subtype_Nonsilent.Mutations.per.M,
+                  colData(data_lusc)$subtype_Selected.Mutation.Summary,
+                  colData(data_coad)$subtype_Nonsilent.Mutations.per.M,
+                  colData(data_brca)$subtype_Nonsilent.Mutations.per.M))
+
+
+
+clab=data.frame( Type, Stage, Subtype, Methylation, Sum_CT_BRCA)
+
+
+Liste=list(Type=c("Primary solid Tumor"="grey","Recurrent Tumor"="grey","Metastatic"="grey",
+                   "Solid Tissue Normal"="goldenrod2",
+                  "Recurrent Tumor"="black"),
+           Stage=c("I-II"="grey100",
+                   "III-IV"="black",
+                   "Stage Tis"="white",
+                   "stage x"="white",
+                   "not reported" = "white"),
+           Subtype = c("Basal" = "black",
+                       "Her2" = "cadetblue1",
+                       "LumA" = "rosybrown1",
+                       "LumB" = "tomato",
+                       "Normal" = "white"),
+           Methylation = c("C1" = "hotpink4",
+                           "C2" = "navy",
+                           "C3" = "steelblue",
+                           "C4" = "black",
+                           "C5" = "chartreuse4",
+                           "C6" = "violet",
+                           "NA" = "white"),
+           Sum_CT_BRCA = colorRamp2(c(min(Sum_CT_BRCA[Tum_BRCA]),94,
+                                      median(Sum_CT_BRCA[Tum_BRCA]),157, max(Sum_CT_BRCA)), 
+                                    c("cyan4", "cyan4","white","hotpink4","hotpink4"))
+           #Mutation = colorRamp2(c(0, max(Mutation)), c("white", "black"))
+           )
+```
+
+
+```{r}
+#Choisir les méthodes de clustering
+Method_dist="euclidean"
+Method_asso="ward.D2"
+#Calcul clust
+column_tree = hclust(
+                dist(log2(t(FC_Immunoscore_BRCA)),
+                method = Method_dist),
+              method = Method_asso)
+#Anno colonnes
+ha= HeatmapAnnotation(df = clab,
+                       col =  Liste,
+                      annotation_legend_param = list(title_gp = gpar(fontsize = 8),
+        labels_gp = gpar(fontsize = 6),grid_height = unit(4, "mm")))
+colors = structure(c("white", "red"), names = c("0","1"))
+
+Heatmap(as.matrix(log2(FC_Immunoscore_BRCA)),
+    name="ht2",
+    cluster_columns = TRUE,
+    clustering_distance_columns  = Method_dist,
+    clustering_method_columns = Method_asso,
+    cluster_rows = FALSE,
+    column_dend_reorder = F,
+    column_title = "CT & TS COAD",
+    column_title_gp = gpar(fontsize = 8),
+  #  km = 3,
+    show_column_names = FALSE,
+    row_names_gp = gpar(fontsize = 8),
+    col = colorRamp2(c(min(log2(FC_Immunoscore_BRCA)),0,1, max(log2(FC_Immunoscore_BRCA)) ), 
+                     c("black", "white", "orange", "red4")),
+    na_col = "black",
+    show_row_names = TRUE,
+    show_heatmap_legend = T,
+    top_annotation = ha,
+    top_annotation_height = unit(2, "cm"))
+```
+```{r}
+#Choisir les méthodes de clustering
+Method_dist="euclidean"
+Method_asso="ward.D2"
+#Calcul clust
+column_tree = hclust(
+                dist(log2(t(FC_MCP_breast)+1),
+                method = Method_dist),
+              method = Method_asso)
+#Anno colonnes
+ha= HeatmapAnnotation(df = clab,
+                       col =  Liste,
+                      annotation_legend_param = list(title_gp = gpar(fontsize = 8),
+        labels_gp = gpar(fontsize = 6),grid_height = unit(4, "mm")))
+colors = structure(c("white", "red"), names = c("0","1"))
+
+Heatmap(as.matrix(log2(FC_MCP_breast+1)),
+    name="ht2",
+    cluster_columns = TRUE,
+    clustering_distance_columns  = Method_dist,
+    clustering_method_columns = Method_asso,
+    cluster_rows = FALSE,
+    column_dend_reorder = F,
+    column_title = "CT & TS COAD",
+    column_title_gp = gpar(fontsize = 8),
+  #  km = 3,
+    show_column_names = FALSE,
+    row_names_gp = gpar(fontsize = 8),
+    col = colorRamp2(c(min(log2(FC_MCP_breast+1)),1,2,max(log2(FC_MCP_breast+1)) ), 
+                     c("black", "white", "orange", "red4")),
+    na_col = "black",
+    show_row_names = TRUE,
+    show_heatmap_legend = T,
+    top_annotation = ha,
+    top_annotation_height = unit(2, "cm"))
+```
+
+
+-------------------------------------------------------------------------------------------------------
+-------------------------------------------------------------------------------------------------------
+------------------------------------------------------------------------------------------------------
+-
+
+#Cor mono
+##Test
+```{r}
+gene_test = "PNMA5"
+cell_choose = 3# Activated CD8
+
+ind = grep(paste(gene_test, "[^[:alnum:]]", sep=""), rownames(EE_CT_BRCA))[1]
+ind_counts = grep(paste(gene_test, "[^[:alnum:]]", sep=""), rownames( assay(data_brca, 2)))[1]
+
+data_test = data.frame(Cell = c(FC_Immunoscore_BRCA[cell_choose, which(EE_CT_BRCA[ind,]==1)],
+                          FC_Immunoscore_BRCA[cell_choose, which(EE_CT_BRCA[ind,]==0)]),
+                  Type = c(rep("ON",length(which(EE_CT_BRCA[ind,]==1))),
+                           rep("OFF",length(which(EE_CT_BRCA[ind,]==0)))),
+                  Gene = c(assay(data_brca,2)[ind_counts,which(EE_CT_BRCA[ind,]==1)],
+                           assay(data_brca, 2)[ind_counts,which(EE_CT_BRCA[ind,]==0)])
+                  )
+
+
+#Standardization
+for (i in c(1,3)) {
+  data_test[,i] = Ma_function_Standardization(data_test[,i])
+}
+
+
+#head(data)
+
+xm = as.matrix(data_test[,c(1,3)])
+#head(xm[,])
+library("Hmisc")
+
+M <-  rcorr(xm, type = "spearman")
+
+
+corr <- ggplot(data = data_test,
+       aes(x = Gene, y = Cell, color = Type))+
+  geom_point(alpha = 0.5)+
+ # geom_smooth(colour = "black",fill="white", method = "loess") +
+  scale_color_manual(values=c("green4", "red4","green4"))+
+  annotate("text", x = 10, 
+           y = max(data_test$Cell), label = equation(M), parse = TRUE)+
+  labs(title=paste(gene_test), x="Log10 Gene",y="Cell",cex=14)+
+  theme_classic()+ 
+ theme(plot.title = element_text(hjust=0.5,colour="black", size = 12),
+              text=element_text(),
+              axis.title = element_text(face="bold"),
+              axis.text.x=element_text(angle=45, hjust=1,colour="black", size = 12),
+              axis.text.y=element_text(colour="black", size = 12))
+
+
+ydensity <- ggplot(data_test, aes(Cell)) + 
+  geom_density(alpha=.5) + 
+  scale_fill_manual(values = c('#999999')) + 
+  theme(legend.position = "none")+
+  theme_classic()+ 
+ theme(plot.title = element_text(NULL),
+              text=element_text(),
+              axis.title = element_text(face="bold"),
+              axis.text.x=element_text(angle=45, hjust=1,colour="black", size = 12),
+              axis.text.y=element_text(colour="black", size = 12))
+
+xdensity <- ggplot(data_test, aes(Gene)) + 
+  geom_density(alpha=.5) + 
+  scale_fill_manual(values = c('#E69F00')) + 
+  theme(legend.position = "none")+
+  theme_classic()+ 
+ theme(plot.title = element_text(NULL),
+              text=element_text(),
+              axis.title = element_text(face="bold"),
+              axis.text.x=element_text(angle=45, hjust=1,colour="black", size = 12),
+              axis.text.y=element_text(colour="black", size = 12))
+
+grid.arrange(xdensity, blankPlot, corr, ydensity, 
+        ncol=2, nrow=2, widths=c(4, 1.4), heights=c(1.4, 4))
+```
+
+
+###Data
+```{r}
+gene_test = rownames(subset(Spm_BRCA2, Spm_BRCA2$SPM >=  0.999))
+cell_choose = 6
+
+
+#Initialisation
+ind_counts = NULL
+ind = NULL
+
+#Selection des indices des lignes
+for (i in seq_along(gene_test)) {
+  ind_counts = c(ind_counts, grep(paste(gene_test[i], "[^[:alnum:]]", sep=""),
+                                rownames(assay(data_brca, 2)))[1])
+}
+
+#Suppression du cas : lignes = NA
+if (is.na(ind_counts)==TRUE) {
+  ind_counts  = ind_counts[-which(is.na(ind_counts)==TRUE)]
+} else {
+  ind_counts = ind_counts
+}
+
+#on assemble les données
+data = cbind(data.frame(Cell = c(
+  #Infiltrat_tot)),
+  Immunoscore_BRCA[cell_choose, ])),
+                    #t(EE_CT_BRCA[ind,])
+                    t(assay(data_brca, 2)[ind_counts,])
+                  )
+dim(data)
+
+#Standardization des data
+for (j in c(1,dim(data)[2])) {
+    data[,j] = Ma_function_Standardization(data[,j])
+}
+
+
+#for (i in c(2:dim(data)[2])) {data[,i] = as.factor(data[,i]) }
+
+#colnames(data) = c("Cell", gene_test)
+head(data[,1:3])
+```
+
+
+##Random Forest
+```{r}
+# detectCores : Find out how many cores are available (if you don't already know)
+#makeCluster :  Create cluster with desired number of cores
+cluster <- makeCluster(detectCores() - 1) # convention to leave 1 core for OS
+registerDoParallel(cluster) # Register cluster
+
+# Find out how many cores are being used
+getDoParWorkers()
+
+set.seed(95014)
+
+#Defaut
+fitControl <- trainControl(method = "cv", number = 5, allowParallel = TRUE)
+
+
+mod_Cyto <- train(Cell ~ ., data = data, method = "rf",
+             trControl = fitControl,importance=T)
+
+# Random Search
+#control <- trainControl(method="repeatedcv", number=10, 
+ #                       repeats=3, search="random", allowParallel = TRUE)
+
+#mtry <- sqrt(ncol(data[, -1]))
+
+#rf_random <- train(Cell~., data=data, method="rf",  
+ #                  tuneLength=15, trControl=control)
+print(mod_Cyto)
+plot(mod_Cyto)
+
+stopCluster(cluster)
+registerDoSEQ() 
+```
+```{r}
+print(mod_Cyto$finalModel)
+
+varImpPlot(mod_Cyto$finalModel, 
+           n.var=min(40, nrow(mod_Cyto$importance)),
+           cex=0.5)
+
+```
+

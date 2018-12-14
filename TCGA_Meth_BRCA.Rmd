@@ -1,0 +1,605 @@
+---
+title: "R Notebook"
+output: html_notebook
+---
+
+#Introduction
+
+Ce notebook explique comment a été réalisé l'analyse de corrélation methylation / expression : 
+==> Etape 1, binarisation 
+#Paths
+```{r}
+pathData = "C:/Users/marth/Desktop/These_Marthe/1_Bioinfo/180801_TCGANormalized_DESeq"
+pathRes = "C:/Users/marth/Desktop/These_Marthe/1_Bioinfo/181115_TCGApostSeminaire/Result_Methylation"
+```
+
+##libariries
+```{r}
+#library(TCGAbiolinks)
+library(SummarizedExperiment)
+
+
+library(psych)
+
+library(ggplot2)
+library(gridExtra)
+library(ComplexHeatmap)
+library(circlize)
+
+library(ggrepel)
+library(dplyr)
+library(DT)
+
+library(MultiAssayExperiment)
+library(ELMER)
+library(parallel)
+```
+
+
+
+##Functions
+
+
+##Datas
+```{r}
+load("C:/Users/marth/Desktop/These_Marthe/1_Bioinfo/181115_TCGApostSeminaire/181297_SPM.RData")
+
+
+	#Pratique quand tu travailles sur des gros fichiers
+#Ex : regrouper des SummExp de différents organes / Projet TCGA
+#Entre ici la liste des fichiers que tu souhaites garder dans ton environnement
+KEEP=c('data_brca','EE_CT_BRCA','Selected_CT',
+                            'data.hg19','dataSubt' ,'dataClin' )
+rm(list= ls()[!(ls() %in% KEEP )])
+#Puis Restart R manuellement
+
+```
+
+```{r}
+Selected_CT = read.table( "C:/Users/marth/Desktop/These_Marthe/1_Bioinfo/181115_TCGApostSeminaire/Results_FPKM/Liste_Spm_0_999_BRCA_Zero_1.txt", 
+            sep = "\t",   h = T)
+
+
+```
+
+##Data
+```{r}
+load("C:/Users/marth/Desktop/These_Marthe/1_Bioinfo/181115_TCGApostSeminaire/181212_Meth_Exp_BRCA.RData")
+```
+
+
+#Download
+https://bioconductor.riken.jp/packages/3.3/bioc/vignettes/TCGAbiolinks/inst/doc/tcgaBiolinks.html
+https://www.bioconductor.org/packages/release/bioc/vignettes/TCGAbiolinks/inst/doc/casestudy.html#case_study_n_3:_integration_of_methylation_and_expression_for_acc
+
+
+```{r}
+#Testé si le serveur GDC est dispo (parfois en maintenance)
+isServeOK()
+
+query_meth.hg19 <- GDCquery(project= "TCGA-BRCA", 
+                            data.category = "DNA methylation", 
+                            platform = "Illumina Human Methylation 450", 
+                            legacy = TRUE)
+GDCdownload(query_meth.hg19)
+data.hg19 <- GDCprepare(query_meth.hg19)
+
+
+
+```
+```{r}
+# get subtype information
+dataSubt <- TCGAquery_subtype(tumor = "BRCA")
+
+# get clinical data
+dataClin <- GDCquery_clinic(project = "TCGA-BRCA","clinical") 
+
+# Which samples are primary solid tumor
+dataSmTP <- TCGAquery_SampleTypes(getResults(query.exp,cols="cases"),"TP") 
+# which samples are solid tissue normal
+dataSmNT <- TCGAquery_SampleTypes(getResults(query.exp,cols="cases"),"NT")
+```
+
+```{r}
+# Step 1.2 download expression data
+#-----------------------------------
+# 1.2 - RNA expression
+# ----------------------------------
+#Harmonized data : aligned on hg38
+query.exp <- GDCquery(project = "TCGA-BRCA",
+                      data.category = "Transcriptome Profiling",
+                      data.type = "Gene Expression Quantification", 
+                      workflow.type = "HTSeq - FPKM-UQ")
+GDCdownload(query.exp)
+brca.exp <- GDCprepare(query = query.exp)
+brca.exp <- brca.exp
+```
+
+#Diff Meth analyse
+
+```{r}
+library(ELMER)
+library(parallel)
+```
+
+A MultiAssayExperiment object from the r BiocStyle::Biocpkg("MultiAssayExperiment") package is the input for multiple main functions of r BiocStyle::Biocpkg("ELMER").
+
+We will first need to get distal probes (2 KB away from TSS).
+
+Il faut avoir une connexion internet.
+```{r}
+distal.probes <- get.feature.probe(genome = "hg19", met.platform = "450K",
+                                    TSS.range = list(upstream = 2000, 
+                                                     downstream = 2000))
+```
+
+
+##CReate MAE
+To create it you can use the createMAE function. This function will keep only samples that have both DNA methylation and gene expression.
+
+
+We will execute ELMER to identify probes that are hypomethylated in tumor samples ON compared to the tumor samples OFF.
+==> For each Selected CT genes
+
+###Test pour un gène
+
+Définir les groupes ON / OFF et ajouter cette info à mae
+
+#####Créer MAE
+http://bioconductor.org/packages/release/bioc/vignettes/ELMER/inst/doc/analysis_data_input.html
+
+https://rdrr.io/bioc/ELMER/man/createMAE.html
+
+
+```{r}
+
+#ajouter l'anno ON / Off au SE
+data_brca2 = data_brca
+
+colData(data_brca2) = cbind(colData(data_brca2),
+                           t(EE_CT_BRCA))
+
+#Fabriquer la table d'expression
+data_exp = assay(data_brca2, 2) *10^6 #Read per millions
+rownames(data_exp) = rowData(data_brca2)$ensembl_gene_id #ENSG anno
+colnames(data_exp) = colData(data_brca2)$sample #Title col == samples Expression
+
+
+#Fabriquer la table de méthylation
+data_met = assay(data.hg19)
+colnames(data_met) =  colData(data.hg19)$sample #Title col = samples Methylation
+
+data_met = data_met[,-which(duplicated(colnames(data_met))==TRUE)] #on enlève les duplicats tech
+
+length(intersect(colnames(data_exp), colnames(data_met)))
+```
+
+```{r}
+id_ens = which(is.element(colnames(data_exp), colnames(data_met))==TRUE)
+data_exp = data_exp[,id_ens] #On ne garde que les échantillons communs
+data_exp = data_exp[, order(colnames(data_exp))] #et on range tout dans l'ordre
+
+id_ens2 = which(is.element( colnames(data_met), colnames(data_exp))==TRUE)
+data_met = data_met[,id_ens2]
+data_met = data_met[, order(colnames(data_met))]
+
+
+
+coldata_ens = colData(data_brca2)[id_ens,]
+colnames(coldata_ens)[1] = "primary"
+dim(coldata_ens)
+rownames(coldata_ens) = coldata_ens$primary #on renome les lignes avec les noms actueel des deux tableaux
+
+coldata_ens = coldata_ens[order(coldata_ens$primary),]
+
+coldata_ens2 = coldata_ens
+
+
+for (i in c(dim(colData(data_brca))[2]:dim(colData(data_brca2))[2])) {
+  coldata_ens2[which(coldata_ens2[,i]=="0"),i] = coldata_ens2$subtype_BRCA_Subtype_PAM50[which(coldata_ens2[,i]=="0")]
+}
+
+for (i in c(dim(colData(data_brca))[2]:dim(colData(data_brca2))[2])) {
+  coldata_ens2[which(coldata_ens2[,i]=="1"),i] = paste(1, coldata_ens2$subtype_BRCA_Subtype_PAM50[which(coldata_ens2[,i]=="1")], sep="_")
+}
+
+
+coldata_ens2[which(coldata_ens$shortLetterCode=="NT"),
+             c(dim(colData(data_brca))[2]:dim(colData(data_brca2))[2])] = "NT"
+
+coldata_ens2[,100:103]
+```
+
+
+On a fait 2 MAE : 
+- Distal probes TSS 2kB
+- All
+
+```{r}
+mae <- createMAE(exp = data_exp ,
+                 met = data_met,
+                 colData = coldata_ens2,
+                 save = TRUE,
+                 linearize.exp = TRUE,
+                 filter.probes = distal.probes,
+                 save.filename = "mae_brca_TSS_19_NT.rda",
+                 met.platform = "450K",
+                 genome = "hg19",
+                 TCGA = FALSE)
+
+mae
+```
+
+
+####DM probes
+http://bioconductor.org/packages/release/bioc/vignettes/ELMER/inst/doc/analysis_diff_meth.html
+
+```{r}
+gene_test = rownames(Selected_CT)[1]
+gene_test = "HORMAD1"
+
+#On récupère éxactement ce motif (probleme des MAGEA1 vs MAGEA10)
+ind = grep(paste(gene_test, "[^[:alnum:]]", sep=""), colnames(colData(mae)))[1]
+
+Subtype="Basal"
+
+group.col <- colnames(colData(mae))[ind] #A column defining the groups of the sample
+group1 <-  paste("1", Subtype, sep="_") # 	A group from group.col. ELMER will run group1 vs group2. 
+                #That means, if direction is hypo, get probes hypomethylated in group 1 compared to group 2.
+group2 <- "Basal"
+direction <-  c( "hypo")
+dir.out <- file.path(paste("brca", gene_test, direction[1],sep=""))
+dir.create(dir.out, recursive = TRUE)
+#--------------------------------------
+# STEP 3: Analysis                     |
+#--------------------------------------
+# Step 3.1: Get diff methylated probes |
+#--------------------------------------
+sig.diff <- get.diff.meth(data = mae, 
+                          group.col = group.col,
+                          group1 =  group1,
+                          group2 = group2,
+                          minSubgroupFrac = 0.2,# if supervised mode set to 1
+                          sig.dif = 0.3,
+                          diff.dir = direction, # Search for hypomethylated probes in group 1
+                          cores = 1, 
+                          dir.out = dir.out, 
+                          pvalue = 0.01,
+                          save = T)
+
+head(sig.diff)
+```
+
+```{r}
+# get.diff.meth automatically save output files. 
+# - getMethdiff.hypo.probes.csv contains statistics for all the probes.
+# - getMethdiff.hypo.probes.significant.csv contains only the significant probes which
+# is the same with sig.diff
+# - a volcano plot with the diff mean and significance levels
+dir(path = "result", pattern = "getMethdiff")  
+```
+
+
+##### Identify Probe-gene pairs
+http://bioconductor.org/packages/release/bioc/vignettes/ELMER/inst/doc/analysis_get_pair.html
+
+For each differentially methylated distal probe (DMC), the closest 10 upstream genes and the closest 10 downstream genes are tested for inverse correlation between methylation of the probe and expression of the gene, which is the same basic strategy employed in ELMER version 1.
+
+
+```{r}
+
+#-------------------------------------------------------------
+# Step 3.2: Identify significant probe-gene pairs            |
+#-------------------------------------------------------------
+# Collect nearby 20 genes for Sig.probes
+nearGenes <- GetNearGenes(data = mae, 
+                          probes = sig.diff$probe, 
+                          numFlankingGenes = 20, # 10 upstream and 10 dowstream genes
+                          cores = 1)
+
+pair <- get.pair(data = mae,
+                 group.col = group.col,
+                 group1 =  group1,
+                 group2 = group2,
+                 nearGenes = nearGenes,
+                 diff.dir = direction,
+               #  minSubgroupFrac = 0.4, # % of samples to use in to create groups U/M
+                 permu.dir = file.path(dir.out,"permu"),
+                 permu.size = 100, # Please set to 100000 to get significant results
+                 raw.pvalue  = 0.05,   
+                 Pe = 0.01, # Please set to 0.001 to get significant results
+                 filter.probes = TRUE, # See preAssociationProbeFiltering function
+                 filter.percentage = 0.05,
+                 filter.portion = 0.3,
+                 dir.out = dir.out,
+                 mode       = "supervised",
+                 cores = 1,
+                 label = direction)
+print(pair) 
+```
+
+```{r}
+# get.pair automatically save output files. 
+# getPair.hypo.all.pairs.statistic.csv contains statistics for all the probe-gene pairs.
+# getPair.hypo.pairs.significant.csv contains only the significant probes which is 
+# same with Hypo.pair.
+dir(path = "result", pattern = "getPair") 
+```
+######Scatter plot
+```{r}
+A = 1
+scatter.plot(data = mae,
+             byProbe = list(probe = pair$Probe[A], numFlankingGenes = 20), 
+             category = group.col, 
+             lm = TRUE, # Draw linear regression curve
+             save = FALSE) 
+scatter.plot(data = mae,
+             byProbe = list(probe = Liste_pair_probes_genes$CTAG1B.1485[A,], numFlankingGenes = 20), 
+             category = group.col, 
+             lm = TRUE, # Draw linear regression curve
+             save = FALSE) 
+```
+
+```{r}
+A = 1
+scatter.plot(data = mae,
+             byPair = list(probe = pair$Probe[A], gene = pair$GeneID[A]), 
+             category = group.col, save = TRUE, lm_line = TRUE)+
+  scale_color_manual(values = c("red", rep("black",5),
+                                "blue", rep("grey",6)))
+```
+
+```{r}
+A = 2
+scatter.plot(data = mae,
+             byPair = list(probe = pair$Probe[A], gene = "ENSG00000143452"), 
+             category = group.col, 
+             save = FALSE, 
+             lm_line = TRUE) +
+  scale_color_manual(values = c("red", rep("black",5),
+                                "blue", rep("grey",6)))
+Ensembl:ENSG00000124260
+Ensembl:ENSG00000198681
+scatter.plot(data = mae,
+             byPair = list(probe = pair$Probe[2], gene = "ENSG00000198681"), 
+             category = group.col, 
+             save = FALSE, 
+             lm_line = TRUE) +
+  scale_color_manual(values = c("red", rep("black",5),
+                                "blue", rep("grey",6)))
+```
+==> Ok, on sélectionne bien les bons gènes
+
+
+
+######Nearby genes
+```{r}
+schematic.plot(pair = pair, 
+               data = mae,
+               group.col = group.col,
+               byProbe = pair$Probe[1],
+               save = FALSE)
+```
+
+
+```{r}
+heatmapPairs(data = mae, 
+             group.col = "definition",
+             group1 = "Primary solid Tumor", 
+             annotation.col = c("years_smoked","gender"),
+             group2 = "Solid Tissue Normal",
+             pairs = pair,
+             filename =  NULL)
+```
+
+
+#### Motif enrichment
+
+
+
+```{r}
+
+# Identify enriched motif for significantly hypomethylated probes which 
+# have putative target genes.
+enriched.motif <- get.enriched.motif(data = mae,
+                                     probes = pair$Probe, 
+                                     dir.out = dir.out, 
+                                     label = direction,
+                                     min.incidence = 10,
+                                     lower.OR = 1.1)
+
+names(enriched.motif) # enriched motifs
+
+head(enriched.motif[names(enriched.motif)[1]]) ## probes in the given set that have the first motif.
+```
+
+
+```{r}
+# get.enriched.motif automatically save output files. 
+# getMotif.hypo.enriched.motifs.rda contains enriched motifs and the probes with the motif. 
+# getMotif.hypo.motif.enrichment.csv contains summary of enriched motifs.
+dir(path = "result", pattern = "getMotif") 
+```
+
+Plot : 
+TF ranking plot: For a given enriched motif, all human TF are ranked by the statistical ???log10(Pvalue) assessing the anti-correlation level of candidate Master Regulator TF expression with average DNA methylation level for sites with the given motif. As a result, the most anti-correlated TFs will be ranked in the first positions. By default, the top 3 most anti-correlated TFs, and all TF classified by TFClass database in the same family and subfamily are highlighted with colors blue, red and orange, respectively. 
+
+```{r}
+# motif enrichment figure will be automatically generated.
+dir(path = "result", pattern = "motif.enrichment.pdf") 
+```
+
+
+```{r}
+
+
+TF <- get.TFs(data = mae, 
+              group.col = group.col,
+              group1 =  group1,
+              group2 = group2,
+              minSubgroupFrac = 0.4,
+              enriched.motif = enriched.motif,
+              dir.out = dir.out, 
+              cores = 1, 
+              label = direction)
+```
+
+###Boucle sur les 73 Selected CT
+```{r}
+Liste_Diff_probes_38 = NULL
+Liste_pair_probes_genes_38 = NULL
+Liste_Motifs_38 = NULL
+Liste_TF_38 = NULL
+
+for (i in seq_along(rownames(Selected_CT))) {
+#for (i in seq_along(rownames(Selected_CT)[1:2])) { #Pour TEST
+#for (i in c(9:length(rownames(Selected_CT)))) {
+
+  
+  gene_test = rownames(Selected_CT)[i]
+  print(gene_test)
+
+#On récupère éxactement ce motif (probleme des MAGEA1 vs MAGEA10)
+  ind = grep(paste(gene_test, "[^[:alnum:]]", sep=""), colnames(colData(mae)))[1]
+  group.col <- colnames(colData(mae))[ind] #A column defining the groups of the sample
+  group1 <-  "1_Basal" # 	A group from group.col. ELMER will run group1 vs group2. 
+  group2 <- "Basal"
+  direction <- "hypo"
+  dir.out <- file.path(paste("ELMER_Basal/brca", gene_test, sep=""), direction)
+  dir.create(dir.out, recursive = TRUE)
+
+    if (sum(which(data.frame(colData(mae))[,ind]=="1_Basal"))<3 |
+       sum(which(data.frame(colData(mae))[,ind]=="Basal"))<3) { #Si on a assez de samples...
+  
+       Liste_Diff_probes_38 = c(Liste_Diff_probes_38, list("No enought samples"))
+      Liste_pair_probes_genes_38 = c(Liste_pair_probes_genes_38, list("No enought samples"))
+       Liste_Motifs_38 = c(Liste_Motifs_38, list("No enought samples"))
+       Liste_TF_38 = c(Liste_TF_38, list("No enought samples"))
+
+    }else{
+      
+#--------------------------------------
+# STEP 3: Analysis                     |
+#--------------------------------------
+# Step 3.1: Get diff methylated probes |
+#--------------------------------------
+    sig.diff <- get.diff.meth(data = mae, 
+                          group.col = group.col,
+                          group1 =  group1,
+                          group2 = group2,
+                          minSubgroupFrac = 0.2,# if supervised mode set to 1
+                          sig.dif = 0.3,
+                          diff.dir = direction, # Search for hypomethylated probes in group 1
+                          cores = 1, 
+                          dir.out = dir.out, 
+                          pvalue = 0.01,
+                          save = T)
+
+    dir(path = "result", pattern = "getMethdiff") 
+
+    Liste_Diff_probes_38 = c(Liste_Diff_probes_38, list(sig.diff))
+
+#----------------------------------------------------
+# Step 3.2: Identify significant probe-gene pairs    |
+#----------------------------------------------------
+
+      if (nrow(sig.diff)==0) {   #Si on a assez de probes signif....
+   
+      Liste_pair_probes_genes_38 = c(Liste_pair_probes_genes_38, list("No enought sign_probes"))
+      Liste_Motifs_38 = c(Liste_Motifs_38, list("No enought sign_probes"))
+      Liste_TF_38 = c(Liste_TF_38, list("No enought sign_probes"))
+      }else{
+    
+        nearGenes <- GetNearGenes(data = mae, 
+                          probes = sig.diff$probe, 
+                          numFlankingGenes = 20, # 10 upstream and 10 dowstream genes
+                          cores = 1)
+
+        pair <- get.pair(data = mae,
+                 group.col = group.col,
+                 group1 =  group1,
+                 group2 = group2,
+                 nearGenes = nearGenes,
+                 minSubgroupFrac = 0.4, # % of samples to use in to create groups U/M
+                 permu.dir = file.path(dir.out,"permu"),
+                 permu.size = 100, # Please set to 100000 to get significant results
+                 raw.pvalue  = 0.05,   
+                 Pe = 0.01, # Please set to 0.001 to get significant results
+                 filter.probes = TRUE, # See preAssociationProbeFiltering function
+                 filter.percentage = 0.05,
+                 filter.portion = 0.3,
+                 dir.out = dir.out,
+                 cores = 1,
+                 label = direction)
+        print(pair)
+        dir(path = "result", pattern = "getPair") 
+
+        Liste_pair_probes_genes_38 = c(Liste_pair_probes_genes_38, list(pair))
+
+#----------------------------------------------------
+# Step 3.3: Motif enrichment analysis on the selected probes    |
+#----------------------------------------------------
+
+          if (length(unique(pair$Probe))<=10) { #we need to have a pair /probe unique length > min.incidence
+              Liste_Motifs_38 = c(Liste_Motifs_38, list("No enought pair_probes"))
+              Liste_TF_38 = c(Liste_TF_38, list("No enought pair_probes"))    
+          }else {
+            
+              enriched.motif <- get.enriched.motif(data = mae,
+                                     probes = pair$Probe, 
+                                     dir.out = dir.out, 
+                                     label = direction,
+                                     min.incidence = 10,
+                                     lower.OR = 1.1)
+
+              print(names(enriched.motif)) # enriched motifs
+              dir(path = "result", pattern = "getMotif") 
+              dir(path = "result", pattern = "motif.enrichment.pdf") 
+              
+              Liste_Motifs_38 = c(Liste_Motifs_38, list(enriched.motif))
+              
+#-------------------------------------------------------------
+# Step 3.4: Identifying regulatory TFs                        |
+#-------------------------------------------------------------
+               if(length(enriched.motif) == 0){
+                 Liste_TF_38 = c(Liste_TF_38, list("Not enought Motif"))
+               }else{
+
+               TF <- get.TFs(data = mae, 
+                  group.col = group.col,
+                  group1 =  group1,
+                  group2 = group2,
+                  minSubgroupFrac = 0.4,
+                  enriched.motif = enriched.motif,
+                  dir.out = dir.out, 
+                  cores = 1, 
+                  label = direction)
+
+              Liste_TF_38 = c(Liste_TF_38, list(TF))
+               }
+          }
+      }
+    }
+names(Liste_Diff_probes_38)[i]=paste(group.col)
+names(Liste_pair_probes_genes_38)[i]=paste(group.col)
+names(Liste_Motifs_38)[i]=paste(group.col)
+names(Liste_TF_38)[i]=paste(group.col)
+}
+
+```
+
+
+
+```{r}
+library("rlist")
+list.save(Liste_Diff_probes, "Liste_Diff_probes.rds")
+list.save(Liste_pair_probes_genes, "Liste_pair_probes_genes.rds")
+list.save(Liste_Motifs, "Liste_Motifs.rds")
+list.save(Liste_TF, "Liste_TF.rds")
+
+mylist <- list.load("Liste_Diff_probes.rds")
+
+```
+
+
+
