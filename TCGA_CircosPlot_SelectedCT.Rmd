@@ -1,0 +1,110 @@
+---
+title: "R Notebook"
+output: html_notebook
+---
+```{r}
+
+```
+
+
+
+```{r}
+library(BioCircos)
+
+BioCircos()
+CTselected_GenomicInfos <- read.delim("C:/Users/Mathieu V/Downloads/CTselected_GenomicInfos.txt", header=T, sep = "\t")
+
+head(CTselected_GenomicInfos)
+```
+
+```{r}
+
+# Arcs coordinates
+snvChr = as.factor(str_sub(as.character(CTselected_GenomicInfos$chrom), 4))
+snvStart = CTselected_GenomicInfos$txStart
+snvEnd =CTselected_GenomicInfos$cdsEnd +10000000
+# Values associated with each point, used as radial coordinate 
+#   on a scale going to minRadius for the lowest value to maxRadius for the highest value
+snvValues = (1:length(snvStart)%%5)+1
+# Create CNV track
+tracks = BioCircosCNVTrack('cnv_track', as.character(snvChr), snvStart, snvEnd, snvValues, 
+  color = "#CC0000", range = c(0,length(snvChr)))
+
+# Add background
+tracks = tracks + BioCircosBackgroundTrack("arcs_background", colors = "#2222EE")
+
+BioCircos(tracks, genomeFillColor = "YlOrBr", genomeTicksDisplay = F, genomeLabelDy = 0)
+```
+```{r}
+
+arcs_chromosomes = c('X', 'X', '2', '9') # Chromosomes on which the arcs should be displayed
+arcs_begin = c(1, 45270560, 140253678, 20484611)
+arcs_end = c(155270560, 145270560, 154978472, 42512974)
+
+arcs_chromosomes = str_sub(as.character(CTselected_GenomicInfos$chrom), 4)
+arcs_begin = CTselected_GenomicInfos$cdsStart
+arcs_end =CTselected_GenomicInfos$cdsEnd + 1000000
+
+tracklist = BioCircosArcTrack('myArcTrack', arcs_chromosomes, arcs_begin, arcs_end,
+  minRadius = 1.18, maxRadius = 1.25, colors = "darkred", opacities = rep(0.6, length(arcs_begin)))
+
+BioCircos(tracklist,  genomeFillColor = "white",
+  chrPad = 0.05, displayGenomeBorder = F, yChr =  T,
+  genomeTicksDisplay = F,  genomeLabelTextSize = 16)
+```
+```{r}
+library(BioCircos)
+
+# Chromosomes on which the points should be displayed
+points_chromosomes =  str_sub(as.character(CTselected_GenomicInfos$chrom), 4)
+# Coordinates on which the points should be displayed
+points_coordinates = CTselected_GenomicInfos$txStart
+# Values associated with each point, used as radial coordinate 
+#   on a scale going to minRadius for the lowest value to maxRadius for the highest value
+points_values = 0:12
+
+
+tracklist = BioCircosSNPTrack('mySNPTrack', points_chromosomes, points_coordinates, 
+  points_values, colors = c("darkred"), minRadius = 0.5, maxRadius = 0.9)
+
+# Background are always placed below other tracks
+tracklist = tracklist + BioCircosBackgroundTrack("myBackgroundTrack", 
+  minRadius = 0.5, maxRadius = 0.9,
+  borderColors = "#AAAAAA", borderSize = 0.6, fillColors = "white") 
+
+
+# Link tracks
+linkPos1 = c(CTselected_GenomicInfos[which(CTselected_GenomicInfos$geneSymbol=="HORMAD1"),]$txStart[1],
+             CTselected_GenomicInfos[which(CTselected_GenomicInfos$geneSymbol=="AKAP14"),]$txStart[1])
+linkPos2 =  c(CTselected_GenomicInfos[which(CTselected_GenomicInfos$geneSymbol=="CXorf61"),]$txStart[1],
+              CTselected_GenomicInfos[which(CTselected_GenomicInfos$geneSymbol=="C1orf158"),]$txStart[1])
+chr1 = c(str_sub(as.character(CTselected_GenomicInfos[which(CTselected_GenomicInfos$geneSymbol=="HORMAD1"),]$chrom), 4)[1],
+         str_sub(as.character(CTselected_GenomicInfos[which(CTselected_GenomicInfos$geneSymbol=="AKAP14"),]$chrom), 4)[1])
+chr2 = c(str_sub(as.character(CTselected_GenomicInfos[which(CTselected_GenomicInfos$geneSymbol=="CXorf61"),]$chrom), 4)[1],
+         str_sub(as.character(CTselected_GenomicInfos[which(CTselected_GenomicInfos$geneSymbol=="C1orf158"),]$chrom), 4)[1])
+
+tracklist = tracklist + BioCircosLinkTrack("testLink", gene1Chromosomes = chr1, 
+  gene1Starts = linkPos1, gene1Ends = linkPos1+1, gene2Chromosomes = chr2, axisPadding = 6,
+  color = "red", width = "0.1em", labels = paste(chr1, chr2, sep = "-"), displayLabel = F,
+  gene2Starts = linkPos2, gene2Ends = linkPos2+1, maxRadius = 0.42)
+
+
+
+BioCircos(tracklist, genomeFillColor = "black",
+  chrPad = 0.05, displayGenomeBorder = FALSE, yChr =  FALSE,
+  genomeTicksDisplay = FALSE,  genomeLabelTextSize = 18, genomeLabelDy = 0)
+
+```
+
+```{r}
+library(chromoMap)
+
+data = data.frame(name =CTselected_GenomicInfos$geneSymbol[- which(duplicated(CTselected_GenomicInfos$geneSymbol)==T)],
+                  chrom = CTselected_GenomicInfos$chrom[- which(duplicated(CTselected_GenomicInfos$geneSymbol)==T)],
+                  start =  CTselected_GenomicInfos$txStart[- which(duplicated(CTselected_GenomicInfos$geneSymbol)==T)],
+                  data = rep(1, length( CTselected_GenomicInfos$cdsStart[- which(duplicated(CTselected_GenomicInfos$geneSymbol)==T)])))
+
+chromoMap(data,type = "annotation", ,chCol = "white",chBorder = "black", annoColor = "orange")
+
+```
+
