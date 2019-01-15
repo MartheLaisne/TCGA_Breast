@@ -1,0 +1,1048 @@
+---
+title: "R Notebook"
+output: html_notebook
+---
+
+Ce notebook décrit comment lier méthylation et expression pour l'expression des gènes dans les tumeurs breast.
+Il explore : les corrélations méthylation / expression pour Hormad1 ;
+les corrélations expression / méthylation pour différents gènes intéressant, éventuellement impliqués dans le contôle d'HORMAD1.
+
+Pour ca, on utilise : 
+=> Les annotations fournies par Illumina (hg19, version ?) pour la puce. C'est plus juste que les annotations UCSC, on ne sait pas quelle release exactement est utilisée. 
+=> un calcul de corrélation entre l'expression du gène d'intérêt, et tous les CpG de la 450K, pour les échantillons complets (870 samples, dans data_exp et data_met, tables construites dans le Notebook "TCGA_Meth_BRCA" du 8/01/2019)
+=> On utilise le package Gviz pour visualiser conjointement les positions et les corrélations.
+
+#Introduction
+
+##Paths
+```{r}
+pathData = "C:/Users/marth/Desktop/These_Marthe/1_Bioinfo/180801_TCGANormalized_DESeq"
+pathRes = "C:/Users/marth/Desktop/These_Marthe/1_Bioinfo/181115_TCGApostSeminaire/Results_MethylationHORMAD1"
+```
+
+
+##Data
+###Initial
+```{r}
+load("C:/Users/marth/Desktop/These_Marthe/1_Bioinfo/181115_TCGApostSeminaire/181212_Meth_Exp_BRCA.RData")
+
+KEEP=c('data_brca','EE_CT_BRCA','Selected_CT',
+                            'data.hg19','data_met', 'data_exp', 'coldata_ens' )
+rm(list= ls()[!(ls() %in% KEEP )])
+```
+
+
+###Working
+```{r}
+load("C:/Users/marth/Desktop/These_Marthe/1_Bioinfo/181115_TCGApostSeminaire/Results_MethylationHORMAD1/190110_MethExp_BRCA_Hormad.RData")
+```
+
+
+##Librairies
+
+###Update
+
+```{r}
+if(!require(installr)) {
+install.packages("installr"); require(installr)} #load / install+load installr
+ 
+# using the package:
+updateR()
+
+if (!requireNamespace("BiocManager", quietly = TRUE))
+    install.packages("BiocManager")
+BiocManager::install("IlluminaHumanMethylation450kanno.ilmn12.hg19", version = "3.8")
+BiocManager::install("SummarizedExperiment", version = "3.8")
+BiocManager::install("org.Hs.eg.db", version = "3.8")
+BiocManager::install("TxDb.Hsapiens.UCSC.hg19.knownGene", version = "3.8")
+
+BiocManager::install("ggplot2", version = "3.8")
+BiocManager::install("colorspace", version = "3.8")
+
+BiocManager::install("Hmisc", version = "3.8")
+BiocManager::install("checkmate", version = "3.8")
+
+BiocManager::install("stringr", version = "3.8")
+BiocManager::install("tibble", version = "3.8")
+BiocManager::install("minfi", version = "3.8")
+
+BiocManager::install("Gviz", version = "3.8")# visualization of known genomic information and new experimental data
+BiocManager::install("GenomicRanges")
+
+BiocManager::install("manipulate")
+
+```
+
+###Used
+
+A cause de l'upgrade de r, certains packages n'ont pas été bien copié dans R.5
+```{r}
+library(SummarizedExperiment)
+library(IlluminaHumanMethylation450kanno.ilmn12.hg19)
+
+library("AnnotationDbi")
+library("org.Hs.eg.db")
+library(TxDb.Hsapiens.UCSC.hg19.knownGene)
+
+library(dplyr)
+library(tidyr)
+library(stringr)
+
+library(ggplot2)
+library(manipulate)
+library(Hmisc)
+
+
+library(Gviz)
+```
+
+
+##Functions
+```{r}
+	equation = function(x) {
+  lm_coef <- list(r = round(x$r[1,2], digits = 2),
+                  P = x$P[1,2]);
+  lm_eq <- substitute(bold(Pearson)*":"~~italic(R) == r*","~~italic(pvalue)~"="~P,lm_coef)
+  as.character(as.expression(lm_eq));                 
+	}
+
+corr_by <- function(X) {
+  if (sum( is.na( X[,4] ) ) == 0) {
+    rcorr(X[,1], X[,4], type = "pearson")$r[1,2]
+  }else{
+    return(0)
+  }
+}
+
+```
+
+
+
+#Annotation Methylation
+
+##Avec UCSC
+http://genome.ucsc.edu/cgi-bin/hgTables?command=start
+```{r}
+anno_hg19 = read.table("C:/Users/marth/Desktop/These_Marthe/1_Bioinfo/181115_TCGApostSeminaire/Anno_UCSC_hg19.txt", sep = "\t", header = TRUE)
+head(anno_hg19)
+```
+EDIT : ce n'est pas la même version du génome que Illumina !! Ne pas utiliser
+
+On veut aller de TXNAME => GENEID et SYMBOL
+```{r}
+keytypes(org.Hs.eg.db)
+keytypes(TxDb.Hsapiens.UCSC.hg19.knownGene)
+
+#On va des transcrits aux geneID
+TX_to_GeneID = select(TxDb.Hsapiens.UCSC.hg19.knownGene, 
+      keys(TxDb.Hsapiens.UCSC.hg19.knownGene, "TXNAME"), 
+       "GENEID", "TXNAME")
+
+anno_hg19 = merge(anno_hg19, TX_to_GeneID,
+                  by.x = "name", by.y = "TXNAME")
+
+#Et des geneID aux Symbols
+geneID_to_SYMBOL <- select(org.Hs.eg.db,
+                           keys(org.Hs.eg.db, "ENTREZID"),
+                           "SYMBOL", "ENTREZID")
+
+anno_hg19 = merge(anno_hg19, geneID_to_SYMBOL,
+                  by.x = "GENEID", by.y = "ENTREZID")
+
+head(anno_hg19) 
+```
+
+Vérification : 
+
+
+```{r}
+anno_hg19[which(anno_hg19$SYMBOL=="HORMAD1"),]
+
+#Quels transcrits correspondent à HORMAD1 ? 
+
+txStart_hormad = anno_hg19[which(anno_hg19$SYMBOL=="HORMAD1"),]$txStart[1]
+txStart_hormad
+
+#+/- 1kb HORMAD1
+min_txS_hormad = txStart_hormad - 10^3
+max_txS_hormad = txStart_hormad + 10^3
+
+```
+On a trois transcrits, tous avec le même START, sur le ch1
+
+```{r}
+#Voici les probes d'intéret autour des start de ces 3 transcrits Hormad1
+subset(subset(annotation.meth, chr =="chr1"), pos >=min_txS_hormad & pos <=max_txS_hormad)
+
+probes1 = subset(subset(annotation.meth, chr =="chr1"), pos >=min_txS_hormad & pos <=max_txS_hormad)$probeID
+```
+Mal annoté ?  Mauvaise version du génome ? En tout cas, on préfère utiliser les anno Illumina
+
+
+##Avec Illumina
+
+On récupère les données d'annotation founies par la plate-forme Illumina, et on les associe à notre table de methylation
+```{r}
+#Données d'anno des 450K
+data("IlluminaHumanMethylation450kanno.ilmn12.hg19")
+annotation.table = getAnnotation(IlluminaHumanMethylation450kanno.ilmn12.hg19)
+
+annotation.meth = merge(rowData(data.hg19), data.frame(annotation.table), by.x = "probeID", by.y = "row.names")
+
+head(annotation.meth, 1)
+```
+
+#Corrélation en cis HORMAD1
+
+On selectionne les probes proches physiquemet du gène Hormad1 
+
+##Visualisation des probes HORMAD1
+
+On sélectionne les probes annotées HORMAD1 par Illumina
+```{r}
+#Probes associées à Hormad1
+Gene_int = "HORMAD1"
+
+#Combien a t on de probes ? 
+subset(annotation.meth, Gene_Symbol == Gene_int) %>% dim
+class(subset(annotation.meth, Gene_Symbol == Gene_int))
+```
+On a 9 probes autour de Hormad1 
+
+Pour les visualiser, on veut utiliser Gviz. Gviz prend en entrée des GRanges: on fait un subset de data_met avec nos probes d'intéret, et on transforme ce subset en GRange
+
+```{r}
+data = subset(annotation.meth, Gene_Symbol %in% Gene_int)
+
+gr <- GRanges(
+    seqnames = Rle(data$chr),
+    ranges = IRanges(data$pos, end = c(data$pos+1), names = data$probeID),
+    strand = Rle(strand(data$strand)))
+gr
+```
+
+On construit à présent les différentes track pour Gviz
+```{r}
+#Add annotation from selected CpG
+atr <- AnnotationTrack(gr, name="Hormad1")
+
+#Add chromosome draw
+grt <- GenomeAxisTrack()
+itr <- IdeogramTrack(genome = "hg19", chromosome = "chr1")
+
+#A dd gene region track : V1
+library(TxDb.Hsapiens.UCSC.hg19.knownGene)
+txdb <- TxDb.Hsapiens.UCSC.hg19.knownGene
+txTr <- GeneRegionTrack(txdb, chromosome = data$chr[1], start = c(min(data$pos)-10^4), 
+                        end = c(max(data$pos)+10^4),
+                        name = "Gene Model", showID=TRUE, symbol = "HORMAD1")
+
+plotTracks(list(itr, grt, atr, txTr),  shape = "arrow",
+    transcriptAnnotation = "symbol")
+
+# Add gene region track V2 using BioMarthe : il faut une connexion réseau
+biomTrack <- BiomartGeneRegionTrack(genome = "hg19",name = "Gene_Model",
+                                    chromosome = data$chr[1], start = c(min(data$pos)-10^2), 
+                        end = c(max(data$pos)+10^2))
+
+feature(biomTrack)
+displayPars(biomTrack) <- list("utr5" = "darkred",
+                               "protein_coding" = "black",
+                               "utr3" = "darkgreen",
+                               "non_coding" = "white",
+                               "snRNA" = "white",
+                               "miRNA" = "white",
+                               "misc_RNA_pseudogene" = "white",
+                               "tRNA_pseudogene" = "white",
+                               "snRNA_pseudogene" = "white")
+
+plotTracks(list(itr, grt, atr, biomTrack), 
+    transcriptAnnotation = "symbol", 
+    from = c(min(data$pos)-10^4), to = c(max(data$pos)+10^4))
+```
+
+##Correlation HORMAD1 / Proches
+
+On a les probes, prenons l'expression :
+On sélectionne uniquement les probes qui nous intéressent, et l'expression de HORMAD1
+
+```{r}
+#Probes associées à Hormad1
+Gene_int = "HORMAD1"
+
+probes1 = annotation.meth[grep(Gene_int, annotation.meth$Gene_Symbol),]$probeID
+
+#SUbset methylation de ces probes / ech
+met_hormad_1 = subset(data_met, rownames(data_met) %in% probes1)
+
+rownames(met_hormad_1) = paste(annotation.meth[grep(Gene_int, annotation.meth$Gene_Symbol),
+                                               ]$UCSC_RefGene_Group,
+                               rownames(met_hormad_1), sep="_") #Pour annoter mieux les CpG selon localisation
+
+#Expression de HORMAD1 / ech
+ENS_Hormad <- AnnotationDbi::select(org.Hs.eg.db, Gene_int,
+                           "ENSEMBL", "SYMBOL")
+
+exp_hormad_1 = subset(data_exp, rownames(data_exp) %in% ENS_Hormad$ENSEMBL)
+dim(exp_hormad_1)
+```
+
+Quels sont le sniveaux d'expression de hormad1 dans ce dataset
+```{r}
+quant_hormad = quantile(exp_hormad_1, 
+         probs = seq(0, 1, 0.1))
+quant_hormad
+```
+```{r}
+exp_hormad_1 = data.frame( t(exp_hormad_1))
+mini = quant_hormad[2]
+maxi = quant_hormad[10]
+
+exp_hormad_1 <- exp_hormad_1 %>% 
+                mutate(State_quantile = ifelse(exp_hormad_1[,1] <= c(mini), 
+                                               paste("Low", Gene_int, sep = "_"),
+                                        ifelse(exp_hormad_1[,1] >= c(maxi), 
+                                               paste("High", Gene_int, sep = "_"), 
+                                         "NS"
+                                               )
+                                          )
+                      )
+exp_hormad_1 %>% head
+```
+
+
+```{r}
+#On assemble méthylation et expression
+exp_met_hormad_1 = data.frame(exp_hormad_1, t(met_hormad_1))
+exp_met_hormad_1 %>% head
+
+exp_met_hormad_1 <- data.frame(ENSG00000143452 = rep(exp_met_hormad_1[,1], length(probes1)),
+                              gather(exp_met_hormad_1[,2:c(length(probes1)+2)], 
+                                     "Cg", "meth", 
+                                     2:c(length(probes1)+1) ))
+
+exp_met_hormad_1 %>% head
+```
+
+```{r}
+ggplot(data = exp_met_hormad_1,
+       aes(x = log2(1+ENSG00000143452), y = meth, color = State_quantile ))+
+  geom_point()+
+  geom_smooth(colour = "black",fill="white", method = "lm") +
+  facet_wrap(~Cg) +
+  scale_color_manual(values=c("red4", "cyan4","grey"))+
+  labs(title="Correlation HORMAD1 exp / meth \n All Tumors (Breast)", y="beta value",x="log2(HORMAD1 expression)",cex=10)+
+  theme_classic()+ 
+ theme(plot.title = element_text(size = 14, face = "bold",hjust = 0.5),
+              text=element_text(),
+              axis.title = element_text(face="bold"),
+              axis.text.x=element_text(angle=45, hjust=1,colour="black", size = 11),
+              axis.text.y=element_text(colour="black", size = 9))
+```
+
+On calcule les coefficients de corrélation grâce au calcul matriciel et un petit by :
+On corrèle la colonne 1 (expression) avec la colonne 4 (methylation), pour chaque CpG (colonne 3)
+On récupère le coeff de corrélation.
+Si NA, on retourne zéro. 
+
+```{r}
+corr_by <- function(X) {
+  if (sum( is.na( X[,4] ) ) == 0) {
+    rcorr(X[,1], X[,4], type = "pearson")$r[1,2]
+  }else{
+    return(0)
+  }
+}
+
+
+Corr_Hormad <- by(exp_met_hormad_1, exp_met_hormad_1[,3], corr_by)
+Corr_Hormad
+```
+
+## Visualisation corrélation
+```{r}
+dat <-  GRanges(
+    seqnames = Rle(data$chr),
+    ranges = IRanges(data$pos, end = c(data$pos+1), names = data$probeID),
+    strand = Rle(strand(data$strand)),
+    score = as.numeric(Corr_Hormad)
+  #  GC = seq(1, 0, length=10)
+  )
+
+dTrack <- DataTrack(start = data$pos, width = 5, chromosome = data$chr, genome = "hg19",
+                    name = "Corr", data = as.numeric(Corr_Hormad))
+plotTracks(list(itr, grt, atr,dTrack, biomTrack), type = "histogram",# shape = "arrow",
+    transcriptAnnotation = "symbol", from = c(min(data$pos)-10^4), to = c(max(data$pos)+10^4),
+    Gene_Model = "darkred")
+
+#Améliorons le rendu : 
+
+displayPars(biomTrack) <- list("utr5" = "darkred",
+                               "protein_coding" = "black",
+                               "utr3" = "black",
+                               "non_coding" = "white",
+                               "snRNA" = "white",
+                               "miRNA" = "white",
+                               "misc_RNA_pseudogene" = "white",
+                               "tRNA_pseudogene" = "white",
+                               "snRNA_pseudogene" = "white")
+
+displayPars(dTrack) = list("col.histogram" = "darkgreen",
+                           "col" = "darkgreen",
+                           "fill.horizon"= "darkgreen",
+                           "fill.mountain"= "darkgreen")
+
+plotTracks(list(itr, grt,atr, dTrack, biomTrack), type = c("p", "a"), 
+           # shape = "arrow",
+    transcriptAnnotation = "symbol", from = c(min(data$pos)-10^4), to = c(max(data$pos)+10^4))
+```
+```{r}
+plotTracks(list(itr, grt,atr, dTrack, biomTrack), type = c("p", "a"), 
+           # shape = "arrow",
+    transcriptAnnotation = "symbol", from = c(max(data$pos)-10^3), to = c(max(data$pos)+10^3))
+```
+
+
+```{r}
+
+test_t_by <- function(X) {
+  if (sum( is.na( X[,4] ) ) == 0 & sum( is.na( X[,2] ) ) == 0) {
+    wilcox.test(subset(X[,4], X[,2]=="Low_HORMAD1"), 
+                subset(X[,4], X[,2]=="High_HORMAD1"),  alternative = c("two.sided"))
+  }else{
+    return(NA)
+  }
+}
+
+by(exp_met_hormad_1,exp_met_hormad_1[,3],test_t_by)
+
+```
+
+
+
+#Corrélation en trans Hormad1
+
+##Test Chr1
+On commence par tester le code sur toutes les probes du chromo 1, avant de chercher des probes sur le génome entier
+
+```{r}
+probes = subset(annotation.meth, chr =="chr1")$probeID
+
+length(probes)
+```
+
+
+```{r}
+met_hormad_ch1= subset(data_met, rownames(data_met) %in% probes)
+
+rownames(met_hormad_ch1) = paste(subset(annotation.meth, chr =="chr1")$Gene_Symbol,
+                               paste(subset(annotation.meth, chr =="chr1")$UCSC_RefGene_Group,
+                               rownames(met_hormad_ch1), sep="_"), sep = "_")
+
+exp_met_hormad_ch1 = data.frame(exp_hormad_1, t(met_hormad_ch1))
+exp_met_hormad_ch1 %>% head
+
+exp_met_hormad_ch1 = data.frame(ENSG00000143452 = rep(exp_met_hormad_ch1[,1],
+                                                      length(probes)),
+                              gather(exp_met_hormad_ch1[,2:c(length(probes)+2)], 
+                                     "Cg", "meth", 2:c(length(probes)+1) ))
+
+exp_met_hormad_ch1 %>% head
+exp_met_hormad_ch1 %>% tail
+
+```
+
+
+```{r}
+Corr_chr1 <- by(exp_met_hormad_ch1, exp_met_hormad_ch1[,3],corr_by)
+
+Corr_chr1 %>% head
+
+Corr_chr1[which(abs(Corr_chr1)>=0.4)] %>% dim
+```
+### Liste corr Ch1
+```{r}
+signif_ch1 = Corr_chr1[which(abs(Corr_chr1)>=0.4)]
+
+#on garde les Cg signifiants
+signif_ch1_cg = str_sub(names(signif_ch1), -10)
+
+#Test : on veut extraire les nom des gènes
+gsub("_+.*","","ATGAS_1121")
+# "_" répété au moins une fois suivit par "." any character "*" répété zéro fois ou plus, remplacer par ""
+
+
+unique(gsub("_+.*","",names(signif_ch1)))
+sort(table(gsub("_+.*","",names(signif_ch1))))
+```
+
+###Plot les CHro1
+```{r}
+data = subset(annotation.meth, probeID %in% signif_ch1_cg)
+
+gr <- GRanges(
+    seqnames = Rle(data$chr),
+    ranges = IRanges(data$pos, end = c(data$pos+1), names = data$probeID),
+    strand = Rle(strand(data$strand)),
+   score = as.numeric(signif_ch1)
+  #  GC = seq(1, 0, length=10)
+  )
+
+#Add anno from selected CpG
+atr <- AnnotationTrack(gr, name="CpG Signif / Hormad1")
+
+#Add corr
+dTrack <- DataTrack(start = data$pos, width = 5, chromosome = data$chr, genome = "hg19",
+                    name = "Cor / Hormad1", data = as.numeric(signif_ch1))
+
+#Add chromo
+grt <- GenomeAxisTrack()
+itr <- IdeogramTrack(genome = "hg19", chromosome = "chr1")
+
+#Add gene region track : Using BiMarthe
+biomTrack <- BiomartGeneRegionTrack(genome = "hg19",name = "Gene_Model",
+                                    chromosome = data$chr[1], start = c(min(data$pos)-10^2), 
+                        end = c(max(data$pos)+10^2))
+
+#Add Hormad1 gene region track
+biomTrack <- BiomartGeneRegionTrack(genome = "hg19",
+     name = "ENSEMBL", symbol = "HORMAD1")
+
+feature(biomTrack)
+displayPars(biomTrack) <- list("utr5" = "darkred",
+                               "protein_coding" = "black",
+                               "utr3" = "darkgreen",
+                               "non_coding" = "white",
+                               "snRNA" = "white",
+                               "miRNA" = "white",
+                               "misc_RNA_pseudogene" = "white",
+                               "tRNA_pseudogene" = "white",
+                               "snRNA_pseudogene" = "white")
+displayPars(dTrack) = list("col.histogram" = "darkgreen",
+                           "col" = "darkgreen",
+                           "fill.horizon"= "darkgreen",
+                           "fill.mountain"= "darkgreen")
+
+plotTracks(list(itr, grt, atr, dTrack),  type = c("p", "a"), window = 150,
+    transcriptAnnotation = "symbol", from = c(min(data$pos)-10^4), to = c(max(data$pos)+10^4),
+    Gene_Model = "darkred")
+plotTracks(list(itr, grt, atr, dTrack),  type = c("p", "smooth"), window = 150,
+    transcriptAnnotation = "symbol", from = c(min(data$pos)-10^4), to = c(max(data$pos)+10^4))
+```
+```{r}
+plotTracks(list(itr, grt, atr, dTrack, biomTrack),  type = c("a", "p"),
+           collapseTranscripts = TRUE, shape = "arrow", showID = FALSE,
+    transcriptAnnotation = "symbol", from = 150*10^6,  to =160*10^6,
+    Gene_Model = "darkred")
+```
+```{r}
+manipulate(
+  plotTracks(list(itr, grt, atr, dTrack, biomTrack),  type = c("p", "a"),
+           collapseTranscripts = TRUE, shape = "arrow", showID = FALSE,
+    transcriptAnnotation = "symbol", from = x.min,  to =x.max,
+    Gene_Model = "darkred"),
+  x.max = slider(c(min(data$pos)),c(max(data$pos)+10^4),  step = 10^4),
+  x.min = slider(0,c(max(data$pos)),  step = 10^4)
+  
+)
+```
+
+##Tous les chr
+```{r}
+#itérateur
+Vect_chr = c(paste("chr", 1:22, sep=""), "chrY", "chrX")
+
+# initialisation
+Corr_all = c()
+signif_all = c()
+signif_all_cg = c()
+
+for (i in seq_along(Vect_chr)) {
+
+print(i)
+probes <- subset(annotation.meth, chr == Vect_chr[i])$probeID #Sélection des probes
+length(probes) %>% print
+
+met_hormad_it <- subset(data_met, rownames(data_met) %in% probes) #subset meth
+
+rownames(met_hormad_it) <- paste(subset(annotation.meth, chr ==  Vect_chr[i])$Gene_Symbol,
+                               paste(subset(annotation.meth, chr == Vect_chr[i])$UCSC_RefGene_Group,
+                               rownames(met_hormad_it), sep="_"), sep = "_")
+
+exp_met_hormad_it <- data.frame(exp_hormad_1, t(met_hormad_it)) #construction exp / meth
+
+exp_met_hormad_it <- data.frame(ENSG00000143452 = rep(exp_met_hormad_it[,1],
+                                                      length(probes)),
+                              gather(exp_met_hormad_it[,2:c(length(probes)+2)], 
+                                     "Cg", "meth", 2:c(length(probes)+1) )) #petit gather pour ord
+
+#Calcul corr
+Corr_it <- by(na.omit(exp_met_hormad_it), na.omit(exp_met_hormad_it)[,3],corr_by)
+Corr_all <- c(Corr_all, Corr_it) #save
+
+Corr_it[which(abs(Corr_it)>=0.4)] %>% dim %>% print #combien de signif sur ce chr
+Corr_all[which(abs(Corr_all)>=0.4)] %>% length %>% print #combien de signif en tout 
+
+signif_all = Corr_all[which(abs(Corr_all)>=0.4)] #on stocke les signif
+signif_all_cg = str_sub(names(signif_all), -10)#on garde les Cg signifiants
+
+gsub("_+.*","",names(signif_all)) %>% table %>% sort %>% tail %>% print #on visualise les TOP
+
+
+}
+
+gsub("_+.*","",names(signif_all)) %>% table %>% sort %>% tail %>% print #on visualise les TOP
+
+
+```
+
+### Barplot
+```{r}
+data_barplot = data.frame(Freq = head(sort(-table(gsub("_+.*","",names(signif_all)))), 30),
+                          Names = names(head(sort(-table(gsub("_+.*","",names(signif_all)))), 30)))
+data_barplot = data_barplot[-1,]
+data_barplot$Freq.Freq = -data_barplot$Freq.Freq
+data_barplot$Names = factor(data_barplot$Names , levels = data_barplot$Names )
+data_barplot$CorrExp_Hormad <- c(-0.21, 0.289, -0.269, -0.232, -0.329, 0.232, 
+                                 -0.161, -0.269, -0.24, -0.364, -0.192, 
+                                 0.344, -0.19, 0.03, -0.325, 0.38, 
+                                 0.145, -0.07, -0.246, -0.158, -0.182, 
+                                 -0.232 ,-0.417, -0.33, -0.216, NA, 
+                                 0.109, -0.282, 0.307 )
+
+data_barplot
+```
+```{r}
+mid = 0 
+
+ggplot(data=data_barplot, 
+       aes(y = Freq.Freq, x =Names, fill = CorrExp_Hormad)) +
+  geom_bar(stat="identity", color = "black")+
+  scale_fill_gradient2(midpoint=mid,  low = "darkcyan",  mid="white", high = "darkred", na.value = "black", breaks=c(-1,-0.4,-0.2,0,0.2,0.4, 1))+
+  coord_flip()+
+  labs(title="Hormad1 exp / CpG Meth", y="# CpG |r| >0.4",x=" ",cex=10)+
+  theme_bw()+ 
+ theme(plot.title = element_text(size = 14, face = "bold",hjust = 0.5),
+              text=element_text(),
+              axis.title = element_text(face="bold"),
+              axis.text.x=element_text(angle=45, hjust=1,colour="black", size = 11),
+              axis.text.y=element_text(colour="black", size = 9))
+```
+
+
+#Exploration
+
+##TP73
+```{r}
+probes2 = subset(annotation.meth, Gene_Symbol =="TP73" & probeID %in% signif_ch1_cg)$probeID
+
+met_hormad_2 = subset(data_met, rownames(data_met) %in% probes2)
+rownames(met_hormad_2) = paste(subset(annotation.meth, Gene_Symbol =="TP73"& probeID %in% signif_ch1_cg)$UCSC_RefGene_Group,
+                               rownames(met_hormad_2), sep="_")
+
+exp_met_hormad_2 = data.frame(exp_hormad_1, t(met_hormad_2))
+exp_met_hormad_2 %>% head
+
+exp_met_hormad_2 = data.frame(ENSG00000143452 = rep(exp_met_hormad_2$ENSG00000143452, length(probes2)),
+                              gather(exp_met_hormad_2[,2:c(length(probes2)+2)], "Cg", "meth", 2:c(length(probes2)+1) ))
+
+exp_met_hormad_2 %>% head
+
+ggplot(data = exp_met_hormad_2,
+       aes(x = log2(1+ENSG00000143452), y = meth, color = State_quantile ))+
+  geom_point()+
+  geom_smooth(colour = "black",fill="white", method = "lm") +
+  facet_wrap(~Cg) +
+  scale_color_manual(values=c("red4", "cyan4","grey"))+
+  labs(title="Correlation HORMAD1 exp / meth \n All Tumors (Breast)", y="beta value",x="log2(TP73 expression)",cex=10)+
+  theme_classic()+ 
+ theme(plot.title = element_text(size = 14, face = "bold",hjust = 0.5),
+              text=element_text(),
+              axis.title = element_text(face="bold"),
+              axis.text.x=element_text(angle=45, hjust=1,colour="black", size = 11),
+              axis.text.y=element_text(colour="black", size = 9))
+```
+
+```{r}
+ENS_TP73 <- AnnotationDbi::select(org.Hs.eg.db, "TP73",
+                           "ENSEMBL", "SYMBOL")
+
+exp_tp73 = subset(data_exp, rownames(data_exp) %in% ENS_TP73$ENSEMBL)
+exp_tp73 = data.frame( t(exp_tp73))
+mini = quant_hormad[2]
+maxi = quant_hormad[10]
+
+exp_tp73 = exp_tp73 %>% mutate(State_quantile = ifelse(exp_hormad_1[,1] <= c(mini) , "Low_Hormad",
+                                  ifelse(exp_hormad_1[,1] >= c(maxi), "High_Hormad", 
+                                         "NS"
+                                         )
+                                  )
+)
+
+exp_met_hormad_2 = data.frame(exp_tp73, t(met_hormad_2))
+exp_met_hormad_2 %>% head
+
+exp_met_hormad_2 = data.frame(ENSG = rep(exp_met_hormad_2[,1], length(probes2)),
+                              gather(exp_met_hormad_2[,2:c(length(probes2)+2)], "Cg", "meth", 2:c(length(probes2)+1) ))
+
+exp_met_hormad_2 %>% head
+
+ggplot(data = exp_met_hormad_2,
+       aes(x = log2(1+ENSG), y = meth, color = State_quantile ))+
+  geom_point()+
+  geom_smooth(colour = "black",fill="white", method = "lm") +
+  facet_wrap(~Cg) +
+  scale_color_manual(values=c("red4", "cyan4","grey"))+
+  labs(title="Correlation TP73 exp / meth \n All Tumors (Breast)", y="beta value",x="log2(TP73 expression)",cex=10)+
+  theme_classic()+ 
+ theme(plot.title = element_text(size = 14, face = "bold",hjust = 0.5),
+              text=element_text(),
+              axis.title = element_text(face="bold"),
+              axis.text.x=element_text(angle=45, hjust=1,colour="black", size = 11),
+              axis.text.y=element_text(colour="black", size = 9))
+```
+Hypomethylation d'un site d'épissage ou d'un prom alternatif : expression d'une isoforme plus coute comme delta(N)TP73 ? Ne pas uovlier qu'on est en FPKM-UQ
+
+###Correlation avec TP73
+```{r}
+CorrSignif_TP73 = signif_ch1[grep("TP73", names(signif_ch1))]
+
+#Probes / Hormad1 corr Signif pour le cas TP73
+met_hormad_ch1 = subset(data_met,rownames(data_met) %in% str_sub(names(CorrSignif_TP73), -10))
+
+#Probes / Hormad1 corr Signif pour le cas TP73
+Corr_TP73 = Corr_chr1[grep("TP73", names(Corr_chr1))]
+met_hormad_ch1 = subset(data_met,rownames(data_met) %in% str_sub(names(Corr_TP73), -10))
+
+
+rownames(met_hormad_ch1) = paste(subset(annotation.meth, rownames(data_met) %in% str_sub(names(Corr_TP73), -10))$Gene_Symbol,
+                               paste(subset(annotation.meth, rownames(data_met) %in% str_sub(names(Corr_TP73), -10))$UCSC_RefGene_Group,
+                               rownames(met_hormad_ch1), sep="_"), sep = "_")
+
+exp_met_tp73_ch1 = data.frame(exp_tp73, t(met_hormad_ch1))
+exp_met_tp73_ch1 %>% head
+
+exp_met_tp73_ch1 = data.frame(ENSG00000143452 = rep(exp_met_tp73_ch1[,1],
+                                                      length(names(Corr_TP73))),
+                              gather(exp_met_tp73_ch1[,2:c(length(names(Corr_TP73))+2)], 
+                                     "Cg", "meth", 2:c(length(names(Corr_TP73))+1) ))
+
+
+
+
+Corr_tp73_Hormad <- by(exp_met_tp73_ch1,exp_met_tp73_ch1[,3],corr_by)
+Corr_tp73_Hormad
+
+```
+
+
+###TP73 Gviz
+```{r}
+data = subset(annotation.meth, probeID %in% signif_ch1_cg)
+data = data[grep("TP73", data$Gene_Symbol),]
+  
+gr <- GRanges(
+    seqnames = Rle(data$chr),
+    ranges = IRanges(data$pos, end = c(data$pos+1), names = data$probeID),
+    strand = Rle(strand(data$strand))
+    #,
+   # score = 1:10,
+  #  GC = seq(1, 0, length=10)
+  )
+
+atr_sub <- AnnotationTrack(gr, name="Signif CpG")
+
+
+Corr_TP73 = Corr_chr1[grep("TP73", names(Corr_chr1))]
+data = subset(annotation.meth, probeID %in% str_sub(names(Corr_TP73), -10))
+
+
+gr <- GRanges(
+    seqnames = Rle(data$chr),
+    ranges = IRanges(data$pos, end = c(data$pos+1), names = data$probeID),
+    strand = Rle(strand(data$strand))
+    #,
+   # score = 1:10,
+  #  GC = seq(1, 0, length=10)
+  )
+
+atr <- AnnotationTrack(gr, name="CpG")
+
+#Add chromo
+grt <- GenomeAxisTrack()
+itr <- IdeogramTrack(genome = "hg19", chromosome = "chr1")
+
+#Add gene region track
+#Using BiMarthe
+biomTrack <- BiomartGeneRegionTrack(genome = "hg19",name = "Gene_Model",
+                                    chromosome = data$chr[1], start = c(min(data$pos)-10^2), 
+                        end = c(max(data$pos)+10^2))
+
+dTrack <- DataTrack(start = data$pos, width = 5, chromosome = data$chr, genome = "hg19",
+                    name = "Cor / Hormad1", data = as.numeric(Corr_TP73))
+
+
+displayPars(dTrack) = list("col.histogram" = "darkgreen",
+                           "col" = "darkgreen",
+                           "fill.horizon"= "darkgreen",
+                           "fill.mountain"= "darkgreen")
+
+dTrack_1 <- DataTrack(start = data$pos, width = 5, chromosome = data$chr, genome = "hg19",
+                    name = "Cor / TP73", data = as.numeric(Corr_tp73_Hormad))
+
+
+displayPars(dTrack_1) = list("col.histogram" = "darkred",
+                           "col" = "darkred",
+                           "fill.horizon"= "darkred",
+                           "fill.mountain"= "darkred")
+
+displayPars(biomTrack) <- list("utr5" = "darkred",
+                               "protein_coding" = "black",
+                               "utr3" = "black",
+                               "non_coding" = "white",
+                               "snRNA" = "white",
+                               "miRNA" = "white",
+                               "misc_RNA_pseudogene" = "white",
+                               "tRNA_pseudogene" = "white",
+                               "snRNA_pseudogene" = "white")
+
+
+
+
+plotTracks(list(itr, grt,atr,atr_sub, dTrack, dTrack_1, biomTrack), type = c( "a","p", "g"), 
+           # shape = "arrow",
+    transcriptAnnotation = "symbol", from = c(min(data$pos)-10^4*2), to = c(max(data$pos)+10^4*2))
+```
+
+
+In preneoplastic cirrhotic livers and hepatocellular carcinomas (HCCs) autocrine activation of epidermal growth factor receptor (EGFR) by its ligand amphiregulin (AR) triggers c-Jun N-terminal kinase-1 (JNK1) activity and inhibits the expression of the splicing regulator Slu7, leading to the selective accumulation of DNp73 transcripts, namely DeltaEx2p73 [30].
+
+Lien entre TP73 et E2F
+
+Il y a une  corrélation claire entre l'expression d'hormad1 et la méthylation de TP73, qui semble conduire à sa répression
+
+https://www.sciencedirect.com/science/article/pii/S0014579314005092 
+
+###IGSF21
+```{r}
+A = "IGSF21"
+probes2 = subset(annotation.meth, Gene_Symbol ==A& probeID %in% signif_ch1_cg)$probeID
+
+met_hormad_2 = subset(data_met, rownames(data_met) %in% probes2)
+rownames(met_hormad_2) = paste(subset(annotation.meth, Gene_Symbol ==A& probeID %in% signif_ch1_cg)$UCSC_RefGene_Group,
+                               rownames(met_hormad_2), sep="_")
+
+exp_met_hormad_2 = data.frame(exp_hormad_1, t(met_hormad_2))
+exp_met_hormad_2 %>% head
+
+exp_met_hormad_2 = data.frame(ENSG00000143452 = rep(exp_met_hormad_2$ENSG00000143452, length(probes2)),
+                              gather(exp_met_hormad_2[,2:c(length(probes2)+2)], "Cg", "meth", 2:c(length(probes2)+1) ))
+
+Corr_TP73 <- by(exp_met_hormad_2,exp_met_hormad_2[,3],corr_by)
+
+##avec l'expression du gene étudié
+ENS_TP73 <- AnnotationDbi::select(org.Hs.eg.db, A,
+                           "ENSEMBL", "SYMBOL")
+
+exp_tp73 = subset(data_exp, rownames(data_exp) %in% ENS_TP73$ENSEMBL)
+exp_tp73 = data.frame( t(exp_tp73))
+mini = quant_hormad[2]
+maxi = quant_hormad[10]
+
+exp_tp73 = exp_tp73 %>% mutate(State_quantile = ifelse(exp_hormad_1[,1] <= c(mini) , "Low_Hormad",
+                                  ifelse(exp_hormad_1[,1] >= c(maxi), "High_Hormad", 
+                                         "NS"
+                                         )
+                                  )
+)
+
+exp_met_hormad_2 = data.frame(exp_tp73, t(met_hormad_2))
+exp_met_hormad_2 %>% head
+
+exp_met_hormad_2 = data.frame(ENSG = rep(exp_met_hormad_2[,1], length(probes2)),
+                              gather(exp_met_hormad_2[,2:c(length(probes2)+2)], "Cg", "meth", 2:c(length(probes2)+1) ))
+
+CorrSignif_TP73 = signif_ch1[grep(A, names(signif_ch1))]
+
+#Probes / Hormad1 corr Signif pour le cas TP73
+met_hormad_ch1 = subset(data_met,rownames(data_met) %in% str_sub(names(CorrSignif_TP73), -10))
+
+#Probes / Hormad1 corr Signif pour le cas TP73
+Corr_TP73 = Corr_chr1[grep(A, names(Corr_chr1))]
+met_hormad_ch1 = subset(data_met,rownames(data_met) %in% str_sub(names(Corr_TP73), -10))
+
+
+rownames(met_hormad_ch1) = paste(subset(annotation.meth, rownames(data_met) %in% str_sub(names(Corr_TP73), -10))$Gene_Symbol,
+                               paste(subset(annotation.meth, rownames(data_met) %in% str_sub(names(Corr_TP73), -10))$UCSC_RefGene_Group,
+                               rownames(met_hormad_ch1), sep="_"), sep = "_")
+
+exp_met_tp73_ch1 = data.frame(exp_tp73, t(met_hormad_ch1))
+exp_met_tp73_ch1 %>% head
+
+exp_met_tp73_ch1 = data.frame(ENSG00000143452 = rep(exp_met_tp73_ch1[,1],
+                                                      length(names(Corr_TP73))),
+                              gather(exp_met_tp73_ch1[,2:c(length(names(Corr_TP73))+2)], 
+                                     "Cg", "meth", 2:c(length(names(Corr_TP73))+1) ))
+
+
+
+
+Corr_tp73_Hormad <- by(exp_met_tp73_ch1,exp_met_tp73_ch1[,3],corr_by)
+Corr_tp73_Hormad
+
+
+########################
+
+data = subset(annotation.meth, probeID %in% signif_ch1_cg)
+data = data[grep(A, data$Gene_Symbol),]
+  
+gr <- GRanges(
+    seqnames = Rle(data$chr),
+    ranges = IRanges(data$pos, end = c(data$pos+1), names = data$probeID),
+    strand = Rle(strand(data$strand))
+  )
+
+atr_sub <- AnnotationTrack(gr, name="Signif CpG")
+
+
+Corr_TP73 = Corr_chr1[grep(A, names(Corr_chr1))]
+data = subset(annotation.meth, probeID %in% str_sub(names(Corr_TP73), -10))
+
+
+gr <- GRanges(
+    seqnames = Rle(data$chr),
+    ranges = IRanges(data$pos, end = c(data$pos+1), names = data$probeID),
+    strand = Rle(strand(data$strand))
+  )
+
+atr <- AnnotationTrack(gr, name="CpG")
+
+#Add chromo
+grt <- GenomeAxisTrack()
+itr <- IdeogramTrack(genome = "hg19", chromosome = "chr1")
+
+#Add gene region track
+#Using BiMarthe
+biomTrack <- BiomartGeneRegionTrack(genome = "hg19",name = "Gene_Model",
+                                    chromosome = data$chr[1], start = c(min(data$pos)-10^2), 
+                        end = c(max(data$pos)+10^2))
+
+dTrack <- DataTrack(start = data$pos, width = 5, chromosome = data$chr, genome = "hg19",
+                    name = "Cor / Hormad1", data = as.numeric(Corr_TP73))
+
+
+displayPars(dTrack) = list("col.histogram" = "darkgreen",
+                           "col" = "darkgreen",
+                           "fill.horizon"= "darkgreen",
+                           "fill.mountain"= "darkgreen")
+
+dTrack_1 <- DataTrack(start = data$pos, width = 5, chromosome = data$chr, genome = "hg19",
+                    name = paste("Cor", A, sep=" "), data = as.numeric(Corr_tp73_Hormad))
+
+
+displayPars(dTrack_1) = list("col.histogram" = "darkred",
+                           "col" = "darkred",
+                           "fill.horizon"= "darkred",
+                           "fill.mountain"= "darkred")
+
+displayPars(biomTrack) <- list("utr5" = "darkred",
+                               "protein_coding" = "black",
+                               "utr3" = "black",
+                               "non_coding" = "white",
+                               "snRNA" = "white",
+                               "miRNA" = "white",
+                               "misc_RNA_pseudogene" = "white",
+                               "tRNA_pseudogene" = "white",
+                               "snRNA_pseudogene" = "white")
+
+
+
+
+plotTracks(list(itr, grt,atr,atr_sub, dTrack, dTrack_1, biomTrack), type = c( "a","p", "g"), 
+           # shape = "arrow",
+    transcriptAnnotation = "symbol", from = c(min(data$pos)-10^4*10), to = c(max(data$pos)+10^4*2))
+
+```
+
+
+###Autres : recherche
+SMYD3
+SETDB1
+```{r}
+A = "IGSF21"
+probes2 = subset(annotation.meth, Gene_Symbol ==A& probeID %in% signif_ch1_cg)$probeID
+
+met_hormad_2 = subset(data_met, rownames(data_met) %in% probes2)
+rownames(met_hormad_2) = paste(subset(annotation.meth, Gene_Symbol ==A& probeID %in% signif_ch1_cg)$UCSC_RefGene_Group,
+                               rownames(met_hormad_2), sep="_")
+
+exp_met_hormad_2 = data.frame(exp_hormad_1, t(met_hormad_2))
+exp_met_hormad_2 %>% head
+
+exp_met_hormad_2 = data.frame(ENSG00000143452 = rep(exp_met_hormad_2$ENSG00000143452, length(probes2)),
+                              gather(exp_met_hormad_2[,2:c(length(probes2)+2)], "Cg", "meth", 2:c(length(probes2)+1) ))
+
+exp_met_hormad_2 %>% head
+
+ggplot(data = exp_met_hormad_2,
+       aes(x = log2(1+ENSG00000143452), y = meth, color = State_quantile ))+
+  geom_point()+
+  geom_smooth(colour = "black",fill="white", method = "lm") +
+  facet_wrap(~Cg) +
+  scale_color_manual(values=c("red4", "cyan4","grey"))+
+  labs(title="Correlation HORMAD1 exp / meth \n All Tumors (Breast)", y="beta value",x="log2(HORMAD1 exp)",cex=10)+
+  theme_classic()+ 
+ theme(plot.title = element_text(size = 14, face = "bold",hjust = 0.5),
+              text=element_text(),
+              axis.title = element_text(face="bold"),
+              axis.text.x=element_text(angle=45, hjust=1,colour="black", size = 11),
+              axis.text.y=element_text(colour="black", size = 9))
+```
+
+```{r}
+ENS_TP73 <- AnnotationDbi::select(org.Hs.eg.db, A,
+                           "ENSEMBL", "SYMBOL")
+
+exp_tp73 = subset(data_exp, rownames(data_exp) %in% ENS_TP73$ENSEMBL)
+exp_tp73 = data.frame( t(exp_tp73))
+mini = quant_hormad[2]
+maxi = quant_hormad[10]
+
+exp_tp73 = exp_tp73 %>% mutate(State_quantile = ifelse(exp_hormad_1[,1] <= c(mini) , "Low_Hormad",
+                                  ifelse(exp_hormad_1[,1] >= c(maxi), "High_Hormad", 
+                                         "NS"
+                                         )
+                                  )
+)
+
+exp_met_hormad_2 = data.frame(exp_tp73, t(met_hormad_2))
+exp_met_hormad_2 %>% head
+
+exp_met_hormad_2 = data.frame(ENSG = rep(exp_met_hormad_2[,1], length(probes2)),
+                              gather(exp_met_hormad_2[,2:c(length(probes2)+2)], "Cg", "meth", 2:c(length(probes2)+1) ))
+
+exp_met_hormad_2 %>% head
+
+ggplot(data = exp_met_hormad_2,
+       aes(x = log2(1+ENSG), y = meth, color = State_quantile ))+
+  geom_point()+
+  geom_smooth(colour = "black",fill="white", method = "lm") +
+  facet_wrap(~Cg) +
+  scale_color_manual(values=c("red4", "cyan4","grey"))+
+  labs(title=paste("Correlation", A,"exp / meth \n All Tumors (Breast)", sep=" "), y="beta value",x=paste("log2(", A, " expression)",sep=" "), cex=10)+
+  theme_classic()+ 
+ theme(plot.title = element_text(size = 14, face = "bold",hjust = 0.5),
+              text=element_text(),
+              axis.title = element_text(face="bold"),
+              axis.text.x=element_text(angle=45, hjust=1,colour="black", size = 11),
+              axis.text.y=element_text(colour="black", size = 9))
+```
+
+
+
+
+
+
+
+
+
