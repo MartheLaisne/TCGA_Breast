@@ -2,6 +2,8 @@
 title: "R Notebook"
 output: html_notebook
 ---
+Ce notebook d√©crit comment explorer l'expression des 73 selected CT √† travers les diff√©rents sous-types de Breast tumeurs. Il aboutit √† la g√©n√©ration de matrices de corr√©lation des CT entre eux, de circos plot pour repr√©senter ces corr√©lations. On en tire aussi le calcul des fr√©quence d'espression (Pour chaque selected CT, #ON / #tous), sa repr√©sentation en heatmap et les boxplot par sous-type.
+
 
 #Introduction
 
@@ -36,7 +38,7 @@ library(circlize)
 ```
 
 
-##DonnÈes
+##Donn√©es
 
 ```{r}
  load("C:/Users/marth/Desktop/These_Marthe/1_Bioinfo/181115_TCGApostSeminaire/181218_WS_CoExpression_Circos_SelectedCT.RData")
@@ -102,11 +104,11 @@ datacorr=data.matrix(t((EE_elected_CT[,])))
 datacorr=data.matrix(t((Exp_elected_CT[,])))
 
 
-EEcor=rcorr(datacorr, type = "spearman") #on calcule les corrÈlations
+EEcor=rcorr(datacorr, type = "spearman") #on calcule les corr√©lations
 
 subset(subset(melt(EEcor$r), value>0.4), value<1) #Corr positives
 
-subset(melt(EEcor$r), value<c(-0.4)) #corr nÈggative
+subset(melt(EEcor$r), value<c(-0.4)) #corr n√©ggative
 
 EEcorplate = data.frame(var1 = melt(EEcor$r)$Var1,
                         var2 = melt(EEcor$r)$Var2,
@@ -116,7 +118,7 @@ head(EEcorplate)
 
 ```
 
-Pas d'anticorrÈlation
+Pas d'anticorr√©lation
 
 ```{r}
 
@@ -146,7 +148,7 @@ corrplot(data_plot, title="73 Selected CT",
 ##Signif CT
 ```{r}
 
-#on sort tous les autres gËnes qui sont corrÈlÈs aux gËnes testÈs
+#on sort tous les autres g√®nes qui sont corr√©l√©s aux g√®nes test√©s
 miniEEcor=subset(subset(subset(EEcorplate[,], 
                         pvalues<0.01), 
                         abs(rvalues)>0.4),
@@ -168,7 +170,7 @@ dim(miniEE_r)
 
 ####Ordonner la matrice
 
-#Choisir les mÈthodes de clustering
+#Choisir les m√©thodes de clustering
 Method_dist="euclidian"
 Method_asso="ward.D2"
 
@@ -195,14 +197,14 @@ corrplot(miniEE_r, title="SIgnif CT",
 
 
 
-=> Pas d'anticorrÈlation entre CT
+=> Pas d'anticorr√©lation entre CT
 
 ##Sortir les clusters
 ```{r}
 #initialisation
 mt=t(miniEE_r)
 
-#choisir les mÈthodes
+#choisir les m√©thodes
 Method_dist="euclidean"
 Method_asso="ward.D2"
 
@@ -210,7 +212,7 @@ Method_asso="ward.D2"
 col=hclust(dist(mt, method=Method_dist),
             method=Method_asso)
 
-# VÈrifier qu'on trouve les m^mes clusters
+# V√©rifier qu'on trouve les m^mes clusters
 plot(col)
 abline(h=7.8, col="red")
 ```
@@ -224,7 +226,7 @@ datacorr=data.matrix(t((EE_elected_CT[,which(Subtype=="LumA")])))
 datacorr=data.matrix(t((Exp_elected_CT[,which(Subtype=="LumA")])))
 
 
-EEcor=rcorr(datacorr, type = "spearman") #on calcule les corrÈlations
+EEcor=rcorr(datacorr, type = "spearman") #on calcule les corr√©lations
 diag(EEcor$r) = 0
 
 EEcorplate = data.frame(var1 = melt(EEcor$r)$Var1,
@@ -249,7 +251,7 @@ corrplot(data_plot, title="73 Selected CT / LumA",
         cl.cex=1)
 
 
-#on sort tous les autres gËnes qui sont corrÈlÈs aux gËnes testÈs
+#on sort tous les autres g√®nes qui sont corr√©l√©s aux g√®nes test√©s
 miniEEcor = subset(subset(EEcorplate[,], 
                         pvalues<0.01), 
                         abs(rvalues)>0.4)
@@ -270,7 +272,7 @@ dim(miniEE_r)
 
 ####Ordonner la matrice
 
-#Choisir les mÈthodes de clustering
+#Choisir les m√©thodes de clustering
 Method_dist="euclidian"
 Method_asso="ward.D2"
 
@@ -378,7 +380,7 @@ datacorr=data.matrix(t((EE_elected_CT[,which(Subtype== id)])))
 datacorr=data.matrix(t((Exp_elected_CT[,which(Subtype== id)])))
 
 
-EEcor=rcorr(datacorr, type = "spearman") #on calcule les corrÈlations
+EEcor=rcorr(datacorr, type = "spearman") #on calcule les corr√©lations
 diag(EEcor$r) = 0
 
 EEcorplate = data.frame(var1 = melt(EEcor$r)$Var1,
@@ -403,7 +405,7 @@ corrplot(data_plot, title=paste("73 Selected CT", id, sep = " / "),
         cl.cex=1)
 
 
-#on sort tous les autres gËnes qui sont corrÈlÈs aux gËnes testÈs
+#on sort tous les autres g√®nes qui sont corr√©l√©s aux g√®nes test√©s
 miniEEcor = subset(subset(EEcorplate[,], 
                         pvalues<0.01), 
                         abs(rvalues)>0.4)
@@ -424,7 +426,7 @@ dim(miniEE_r)
 
 ####Ordonner la matrice
 
-#Choisir les mÈthodes de clustering
+#Choisir les m√©thodes de clustering
 Method_dist="euclidian"
 Method_asso="ward.D2"
 
@@ -532,7 +534,7 @@ datacorr=data.matrix(t((EE_elected_CT[,which(Subtype== id)])))
 datacorr=data.matrix(t((Exp_elected_CT[,which(Subtype== id)])))
 
 
-EEcor=rcorr(datacorr, type = "spearman") #on calcule les corrÈlations
+EEcor=rcorr(datacorr, type = "spearman") #on calcule les corr√©lations
 diag(EEcor$r) = 0
 
 EEcorplate = data.frame(var1 = melt(EEcor$r)$Var1,
@@ -561,7 +563,7 @@ corrplot(data_plot, title=paste("73 Selected CT", id, sep = " / "),
         cl.cex=1)
 
 
-#on sort tous les autres gËnes qui sont corrÈlÈs aux gËnes testÈs
+#on sort tous les autres g√®nes qui sont corr√©l√©s aux g√®nes test√©s
 miniEEcor = subset(subset(EEcorplate[,], 
                         pvalues<0.01), 
                         abs(rvalues)>0.4)
@@ -582,7 +584,7 @@ dim(miniEE_r)
 
 ####Ordonner la matrice
 
-#Choisir les mÈthodes de clustering
+#Choisir les m√©thodes de clustering
 Method_dist="euclidian"
 Method_asso="ward.D2"
 
@@ -688,7 +690,7 @@ datacorr=data.matrix(t((EE_elected_CT[,which(Subtype== id)])))
 datacorr=data.matrix(t((Exp_elected_CT[,which(Subtype== id)])))
 
 
-EEcor=rcorr(datacorr, type = "spearman") #on calcule les corrÈlations
+EEcor=rcorr(datacorr, type = "spearman") #on calcule les corr√©lations
 diag(EEcor$r) = 0
 
 EEcorplate = data.frame(var1 = melt(EEcor$r)$Var1,
@@ -716,7 +718,7 @@ corrplot(data_plot, title=paste("73 Selected CT", id, sep = " / "),
         cl.cex=1)
 
 
-#on sort tous les autres gËnes qui sont corrÈlÈs aux gËnes testÈs
+#on sort tous les autres g√®nes qui sont corr√©l√©s aux g√®nes test√©s
 miniEEcor = subset(subset(EEcorplate[,], 
                         pvalues<0.01), 
                         abs(rvalues)>0.4)
@@ -737,7 +739,7 @@ dim(miniEE_r)
 
 ####Ordonner la matrice
 
-#Choisir les mÈthodes de clustering
+#Choisir les m√©thodes de clustering
 Method_dist="euclidian"
 Method_asso="ward.D2"
 
@@ -994,7 +996,7 @@ BioCircos(tracklist, genomeFillColor = "black",
 
 #Chromomap
 
-On reprÈsente linÈairement les position des 73 sÈlected CT, s ur une carte interactive (Shiny)
+On repr√©sente lin√©airement les position des 73 s√©lected CT, s ur une carte interactive (Shiny)
 ```{r}
 library(chromoMap)
 data = data.frame(name =CTselected_GenomicInfos$geneSymbol[- which(duplicated(CTselected_GenomicInfos$geneSymbol)==T)],
@@ -1027,7 +1029,7 @@ data_heatmap = frequ_subtype[,-c(1, 6)]
 rownames(data_heatmap) = frequ_subtype$Names
 
   
-#Choisir les mÈthodes de clustering
+#Choisir les m√©thodes de clustering
 Method_dist="euclidean"
 Method_asso="ward.D2"
 #Calcul clust
@@ -1043,7 +1045,7 @@ ha= HeatmapAnnotation(df = clab,
         labels_gp = gpar(fontsize = 6),grid_height = unit(2, "mm")))
 
 
-#Premiere heatmap : l'expression normalisÈe, en log2
+#Premiere heatmap : l'expression normalis√©e, en log2
 Heatmap(as.matrix(data_heatmap),
    name="Frequence",
    cluster_columns = data.pv$hclust,
@@ -1059,7 +1061,7 @@ Heatmap(as.matrix(data_heatmap),
    # km = 5,
     col = colorRamp2(c(0,0.2, 0.5,0.6,0.7,1), 
                      c("black", "grey", "white", "orange", "red", "red4")),   row_title_gp = gpar(fontsize = c(6,6)),
-    show_column_names = TRUE, #nom des Èch
+    show_column_names = TRUE, #nom des √©ch
     show_row_names = T, 
     row_names_gp = gpar(fontsize = 4),
     top_annotation = ha, #en top, les anno Cancer / NT etc
@@ -1116,8 +1118,8 @@ for (i in seq_along( rownames(Exp_elected_CT))) {
     scale_fill_manual(values=c("hotpink4","darkcyan","goldenrod3", "orange3", "grey50", "white"))+
     scale_color_manual(values=c("hotpink3","cyan3","goldenrod2", "orange1", "grey70", "grey80"))+
     labs(title=paste(A), x="Subtype",y="FPKM-UQ")+                         
-    theme_classic()+                                                     # thËme blanc
-    theme(plot.title = element_text(size = 12, face = "bold",hjust=0.5),    #titre en gras, centrÈ
+    theme_classic()+                                                     # th√®me blanc
+    theme(plot.title = element_text(size = 12, face = "bold",hjust=0.5),    #titre en gras, centr√©
               text=element_text(),
               axis.title = element_text(face="bold", size=10),        #titre des axes en gras
               axis.text.x=element_text(angle=45, hjust=1,colour="black", size = 8),
@@ -1151,8 +1153,8 @@ g1= ggplot(data = data, aes(x = Subtype, y = Exp+1, fill = Subtype, color = Subt
   scale_fill_manual(values=c("hotpink4","darkcyan","goldenrod3", "orange3", "grey50", "white"))+
   scale_color_manual(values=c("hotpink3","cyan3","goldenrod2", "orange1", "grey70", "grey80"))+
   labs(title=paste(A), x="Subtype",y="FPKM-UQ")+                         
-  theme_classic()+                                                     # thËme blanc
-  theme(plot.title = element_text(size = 12, face = "bold",hjust=0.5),    #titre en gras, centrÈ
+  theme_classic()+                                                     # th√®me blanc
+  theme(plot.title = element_text(size = 12, face = "bold",hjust=0.5),    #titre en gras, centr√©
               text=element_text(),
               axis.title = element_text(face="bold", size=10),        #titre des axes en gras
               axis.text.x=element_text(angle=45, hjust=1,colour="black", size = 8),
@@ -1181,8 +1183,8 @@ g2 = ggplot(data = data, aes(x = Subtype, y = Exp+1, fill = Subtype, color = Sub
   scale_fill_manual(values=c("hotpink4","darkcyan","goldenrod3", "orange3", "grey50", "white"))+
   scale_color_manual(values=c("hotpink3","cyan3","goldenrod2", "orange1", "grey70", "grey80"))+
   labs(title=paste(A), x="Subtype",y="FPKM-UQ")+                         
-  theme_classic()+                                                     # thËme blanc
-  theme(plot.title = element_text(size = 12, face = "bold",hjust=0.5),    #titre en gras, centrÈ
+  theme_classic()+                                                     # th√®me blanc
+  theme(plot.title = element_text(size = 12, face = "bold",hjust=0.5),    #titre en gras, centr√©
               text=element_text(),
               axis.title = element_text(face="bold", size=10),        #titre des axes en gras
               axis.text.x=element_text(angle=45, hjust=1,colour="black", size = 8),
@@ -1210,8 +1212,8 @@ g3 = ggplot(data = data, aes(x = Subtype, y = Exp+1, fill = Subtype, color = Sub
   scale_fill_manual(values=c("hotpink4","darkcyan","goldenrod3", "orange3", "grey50", "white"))+
   scale_color_manual(values=c("hotpink3","cyan3","goldenrod2", "orange1", "grey70", "grey80"))+
   labs(title=paste(A), x="Subtype",y="FPKM-UQ")+                         
-  theme_classic()+                                                     # thËme blanc
-  theme(plot.title = element_text(size = 12, face = "bold",hjust=0.5),    #titre en gras, centrÈ
+  theme_classic()+                                                     # th√®me blanc
+  theme(plot.title = element_text(size = 12, face = "bold",hjust=0.5),    #titre en gras, centr√©
               text=element_text(),
               axis.title = element_text(face="bold", size=10),        #titre des axes en gras
               axis.text.x=element_text(angle=45, hjust=1,colour="black", size = 8),
@@ -1238,8 +1240,8 @@ g4 = ggplot(data = data, aes(x = Subtype, y = Exp+1, fill = Subtype, color = Sub
   scale_fill_manual(values=c("hotpink4","darkcyan","goldenrod3", "orange3", "grey50", "white"))+
   scale_color_manual(values=c("hotpink3","cyan3","goldenrod2", "orange1", "grey70", "grey80"))+
   labs(title=paste(A), x="Subtype",y="FPKM-UQ")+                         
-  theme_classic()+                                                     # thËme blanc
-  theme(plot.title = element_text(size = 12, face = "bold",hjust=0.5),    #titre en gras, centrÈ
+  theme_classic()+                                                     # th√®me blanc
+  theme(plot.title = element_text(size = 12, face = "bold",hjust=0.5),    #titre en gras, centr√©
               text=element_text(),
               axis.title = element_text(face="bold", size=10),        #titre des axes en gras
               axis.text.x=element_text(angle=45, hjust=1,colour="black", size = 8),
@@ -1267,8 +1269,8 @@ g5 = ggplot(data = data, aes(x = Subtype, y = Exp+1, fill = Subtype, color = Sub
   scale_fill_manual(values=c("hotpink4","darkcyan","goldenrod3", "orange3", "grey50", "white"))+
   scale_color_manual(values=c("hotpink3","cyan3","goldenrod2", "orange1", "grey70", "grey80"))+
   labs(title=paste(A), x="Subtype",y="FPKM-UQ")+                         
-  theme_classic()+                                                     # thËme blanc
-  theme(plot.title = element_text(size = 12, face = "bold",hjust=0.5),    #titre en gras, centrÈ
+  theme_classic()+                                                     # th√®me blanc
+  theme(plot.title = element_text(size = 12, face = "bold",hjust=0.5),    #titre en gras, centr√©
               text=element_text(),
               axis.title = element_text(face="bold", size=10),        #titre des axes en gras
               axis.text.x=element_text(angle=45, hjust=1,colour="black", size = 8),
@@ -1295,8 +1297,8 @@ g6 = ggplot(data = data, aes(x = Subtype, y = Exp+1, fill = Subtype, color = Sub
   scale_fill_manual(values=c("hotpink4","darkcyan","goldenrod3", "orange3", "grey50", "white"))+
   scale_color_manual(values=c("hotpink3","cyan3","goldenrod2", "orange1", "grey70", "grey80"))+
   labs(title=paste(A), x="Subtype",y="FPKM-UQ")+                         
-  theme_classic()+                                                     # thËme blanc
-  theme(plot.title = element_text(size = 12, face = "bold",hjust=0.5),    #titre en gras, centrÈ
+  theme_classic()+                                                     # th√®me blanc
+  theme(plot.title = element_text(size = 12, face = "bold",hjust=0.5),    #titre en gras, centr√©
               text=element_text(),
               axis.title = element_text(face="bold", size=10),        #titre des axes en gras
               axis.text.x=element_text(angle=45, hjust=1,colour="black", size = 8),
@@ -1323,8 +1325,8 @@ g11 = ggplot(data = data, aes(x = Subtype, y = Exp+1, fill = Subtype, color = Su
   scale_fill_manual(values=c("hotpink4","darkcyan","goldenrod3", "orange3", "grey50", "white"))+
   scale_color_manual(values=c("hotpink3","cyan3","goldenrod2", "orange1", "grey70", "grey80"))+
   labs(title=paste(A), x="Subtype",y="FPKM-UQ")+                         
-  theme_classic()+                                                     # thËme blanc
-  theme(plot.title = element_text(size = 12, face = "bold",hjust=0.5),    #titre en gras, centrÈ
+  theme_classic()+                                                     # th√®me blanc
+  theme(plot.title = element_text(size = 12, face = "bold",hjust=0.5),    #titre en gras, centr√©
               text=element_text(),
               axis.title = element_text(face="bold", size=10),        #titre des axes en gras
               axis.text.x=element_text(angle=45, hjust=1,colour="black", size = 8),
@@ -1351,8 +1353,8 @@ g7 = ggplot(data = data, aes(x = Subtype, y = Exp+1, fill = Subtype, color = Sub
   scale_fill_manual(values=c("hotpink4","darkcyan","goldenrod3", "orange3", "grey50", "white"))+
   scale_color_manual(values=c("hotpink3","cyan3","goldenrod2", "orange1", "grey70", "grey80"))+
   labs(title=paste(A), x="Subtype",y="FPKM-UQ")+                         
-  theme_classic()+                                                     # thËme blanc
-  theme(plot.title = element_text(size = 12, face = "bold",hjust=0.5),    #titre en gras, centrÈ
+  theme_classic()+                                                     # th√®me blanc
+  theme(plot.title = element_text(size = 12, face = "bold",hjust=0.5),    #titre en gras, centr√©
               text=element_text(),
               axis.title = element_text(face="bold", size=10),        #titre des axes en gras
               axis.text.x=element_text(angle=45, hjust=1,colour="black", size = 8),
@@ -1380,8 +1382,8 @@ g8 = ggplot(data = data, aes(x = Subtype, y = Exp+1, fill = Subtype, color = Sub
   scale_fill_manual(values=c("hotpink4","darkcyan","goldenrod3", "orange3", "grey50", "white"))+
   scale_color_manual(values=c("hotpink3","cyan3","goldenrod2", "orange1", "grey70", "grey80"))+
   labs(title=paste(A), x="Subtype",y="FPKM-UQ")+                         
-  theme_classic()+                                                     # thËme blanc
-  theme(plot.title = element_text(size = 12, face = "bold",hjust=0.5),    #titre en gras, centrÈ
+  theme_classic()+                                                     # th√®me blanc
+  theme(plot.title = element_text(size = 12, face = "bold",hjust=0.5),    #titre en gras, centr√©
               text=element_text(),
               axis.title = element_text(face="bold", size=10),        #titre des axes en gras
               axis.text.x=element_text(angle=45, hjust=1,colour="black", size = 8),
@@ -1408,8 +1410,8 @@ g9 = ggplot(data = data, aes(x = Subtype, y = Exp+1, fill = Subtype, color = Sub
   scale_fill_manual(values=c("hotpink4","darkcyan","goldenrod3", "orange3", "grey50", "white"))+
   scale_color_manual(values=c("hotpink3","cyan3","goldenrod2", "orange1", "grey70", "grey80"))+
   labs(title=paste(A), x="Subtype",y="FPKM-UQ")+                         
-  theme_classic()+                                                     # thËme blanc
-  theme(plot.title = element_text(size = 12, face = "bold",hjust=0.5),    #titre en gras, centrÈ
+  theme_classic()+                                                     # th√®me blanc
+  theme(plot.title = element_text(size = 12, face = "bold",hjust=0.5),    #titre en gras, centr√©
               text=element_text(),
               axis.title = element_text(face="bold", size=10),        #titre des axes en gras
               axis.text.x=element_text(angle=45, hjust=1,colour="black", size = 8),
@@ -1436,8 +1438,8 @@ g10 = ggplot(data = data, aes(x = Subtype, y = Exp+1, fill = Subtype, color = Su
   scale_fill_manual(values=c("hotpink4","darkcyan","goldenrod3", "orange3", "grey50", "white"))+
   scale_color_manual(values=c("hotpink3","cyan3","goldenrod2", "orange1", "grey70", "grey80"))+
   labs(title=paste(A), x="Subtype",y="FPKM-UQ")+                         
-  theme_classic()+                                                     # thËme blanc
-  theme(plot.title = element_text(size = 12, face = "bold",hjust=0.5),    #titre en gras, centrÈ
+  theme_classic()+                                                     # th√®me blanc
+  theme(plot.title = element_text(size = 12, face = "bold",hjust=0.5),    #titre en gras, centr√©
               text=element_text(),
               axis.title = element_text(face="bold", size=10),        #titre des axes en gras
               axis.text.x=element_text(angle=45, hjust=1,colour="black", size = 8),
@@ -1474,7 +1476,7 @@ equation = function(x) {
   as.character(as.expression(lm_eq));                 
 }
 
-#Coeff de corrÈlation
+#Coeff de corr√©lation
 xm = as.matrix(data[,1:2])
 #head(xm[,])
 library("Hmisc")
@@ -1494,8 +1496,8 @@ ggplot(data = data, aes(x = Hormad + 1, y = Cxorf + 1, fill = Subtype, color = S
   scale_color_manual(values=c("hotpink4","darkcyan","goldenrod3", "orange3", "grey50", "grey70"))+
 #  scale_color_manual(values=c("hotpink3","cyan3","goldenrod2", "orange1", "grey70", "grey80"))+
   labs(title="Corr H/C", x="HORMAD1",y="CXorf61")+                         
-  theme_classic()+                                                     # thËme blanc
-  theme(plot.title = element_text(size = 12, face = "bold",hjust=0.5),    #titre en gras, centrÈ
+  theme_classic()+                                                     # th√®me blanc
+  theme(plot.title = element_text(size = 12, face = "bold",hjust=0.5),    #titre en gras, centr√©
               text=element_text(),
               axis.title = element_text(face="bold", size=10),        #titre des axes en gras
               axis.text.x=element_text(angle=45, hjust=1,colour="black", size = 8),
@@ -1524,8 +1526,8 @@ ggplot(data = data, aes(x = Hormad + 1, y = Cxorf + 1, fill = Subtype, color = S
   
   scale_color_manual(values=c("hotpink4","grey70"))+
   labs(title="Corr H/C", x="HORMAD1",y="CXorf61")+                         
-  theme_classic()+                                                     # thËme blanc
-  theme(plot.title = element_text(size = 12, face = "bold",hjust=0.5),    #titre en gras, centrÈ
+  theme_classic()+                                                     # th√®me blanc
+  theme(plot.title = element_text(size = 12, face = "bold",hjust=0.5),    #titre en gras, centr√©
               text=element_text(),
               axis.title = element_text(face="bold", size=10),        #titre des axes en gras
               axis.text.x=element_text(angle=45, hjust=1,colour="black", size = 8),
