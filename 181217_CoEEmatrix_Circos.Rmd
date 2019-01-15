@@ -1,0 +1,1550 @@
+---
+title: "R Notebook"
+output: html_notebook
+---
+
+#Introduction
+
+##Path
+```{r}
+
+pathAnalyse = "C:/Users/marth/Desktop/These_Marthe/1_Bioinfo/181115_TCGApostSeminaire"
+
+pathRes = "C:/Users/marth/Desktop/These_Marthe/1_Bioinfo/181115_TCGApostSeminaire/Results_CoexpressionEEmatrix"
+
+```
+
+
+##Librairies
+```{r}
+library(Hmisc)
+library(corrplot)
+
+library(reshape2)
+
+library(Cairo)
+
+library(ggplot2)
+library(scales)
+library(gridExtra)
+
+library(BioCircos)
+
+library(stringr)
+library(ComplexHeatmap)
+library(circlize)
+```
+
+
+##Données
+
+```{r}
+ load("C:/Users/marth/Desktop/These_Marthe/1_Bioinfo/181115_TCGApostSeminaire/181218_WS_CoExpression_Circos_SelectedCT.RData")
+```
+
+
+```{r}
+CTselected_GenomicInfos <- read.delim("C:/Users/marth/Desktop/These_Marthe/1_Bioinfo/181115_TCGApostSeminaire/CTselected_GenomicInfos.txt", header=T, sep = "\t")
+CTselected_GenomicInfos <- read.delim("C:/Users/Mathieu V/Downloads/CTselected_GenomicInfos.txt", header=T, sep = "\t")
+
+CTall_GenomicInfos  <- read.delim("C:/Users/Mathieu V/Downloads/AllCT_genomicCoordinate(3).txt", header=T, sep = "\t")
+
+
+Selected_CT = read.table( "C:/Users/marth/Desktop/These_Marthe/1_Bioinfo/181115_TCGApostSeminaire/Results_FPKM/Liste_Spm_0_999_BRCA_Zero_1.txt", 
+            sep = "\t",   h = T)
+All_CT = read.table( "C:/Users/marth/Desktop/These_Marthe/1_Bioinfo/181115_TCGApostSeminaire/Results_FPKM/Liste_Spm_0_999_BRCA_Zero_1.txt", 
+            sep = "\t",   h = T)
+
+
+gene_test = rownames(Selected_CT)
+ind = NULL
+
+for (i in seq_along(gene_test)) {
+ind = c(ind, grep(paste(gene_test[i], "[^[:alnum:]]", sep=""), rownames(EE_CT_BRCA))[1])
+}
+length(ind)
+
+EE_elected_CT = EE_CT_BRCA[ind, ]
+rownames(EE_elected_CT) = rownames(Selected_CT)
+
+```
+
+
+```{r}
+
+#EN valeurs FPKM_UQ 
+
+gene_test = rownames(Selected_CT)
+ind = NULL
+
+for (i in seq_along(gene_test)) {
+ind = c(ind, grep(paste(gene_test[i], "[^[:alnum:]]", sep=""),rownames(data_brca))[1])
+}
+length(ind)
+
+Exp_elected_CT = assay(data_brca, 2)[ind, ]*10^6
+rownames(Exp_elected_CT) = rownames(Selected_CT)
+
+```
+```{r}
+CTselected_GenomicInfos_all = CTselected_GenomicInfos
+CTselected_GenomicInfos = CTselected_GenomicInfos_all[-which( duplicated (CTselected_GenomicInfos_all$geneSymbol) == TRUE),
+                                                      ]
+```
+
+
+#Co-expression
+
+##SUr les CT
+```{r}
+
+datacorr=data.matrix(t((EE_elected_CT[,])))
+datacorr=data.matrix(t((Exp_elected_CT[,])))
+
+
+EEcor=rcorr(datacorr, type = "spearman") #on calcule les corrélations
+
+subset(subset(melt(EEcor$r), value>0.4), value<1) #Corr positives
+
+subset(melt(EEcor$r), value<c(-0.4)) #corr néggative
+
+EEcorplate = data.frame(var1 = melt(EEcor$r)$Var1,
+                        var2 = melt(EEcor$r)$Var2,
+                        rvalues = melt(EEcor$r)$value,
+                        pvalues =melt(EEcor$P)$value )
+head(EEcorplate)
+
+```
+
+Pas d'anticorrélation
+
+```{r}
+
+data_plot=EEcor$r
+dim(data_plot)
+
+corrplot(data_plot, title="73 Selected CT",          
+        # type = "upper", 
+         method="square",outline=F,addgrid.col = NA,
+         order="hclust", 
+         hclust.method="ward.D2",
+         mar = c(1,0,1,0),
+       #  addrect = 4, rect.col = "black", rect.lwd = 5,
+         col=colorRampPalette(c("goldenrod3", "white", "indianred4"))(20),
+         bg="white",
+         tl.col="black", tl.srt=45, tl.cex=0.5, 
+        cl.cex=1)
+
+```
+
+
+
+
+
+
+
+##Signif CT
+```{r}
+
+#on sort tous les autres gènes qui sont corrélés aux gènes testés
+miniEEcor=subset(subset(subset(EEcorplate[,], 
+                        pvalues<0.01), 
+                        abs(rvalues)>0.4),
+                 abs(rvalues)<1)
+
+
+miniEE_r=dcast(miniEEcor[,1:3], var1~var2, 
+               value.var="rvalues")
+
+rownames(miniEE_r)=miniEE_r$var1
+miniEE_r=miniEE_r[,-1]
+
+miniEE_r=data.matrix(miniEE_r)
+miniEE_r[which(is.na(miniEE_r)==T)]=0
+
+diag(miniEE_r) = 1 #on remet les 1 enlever pour les autocor
+
+dim(miniEE_r)
+
+####Ordonner la matrice
+
+#Choisir les méthodes de clustering
+Method_dist="euclidian"
+Method_asso="ward.D2"
+
+tree = hclust(
+              dist(miniEE_r,
+              method = Method_dist),
+      method = Method_asso)
+
+miniEE_r=miniEE_r[tree$order, tree$order]
+
+colortest=rep("black", dim(miniEE_r)[1])
+
+corrplot(miniEE_r, title="SIgnif CT",
+        type = "upper", 
+         method="square",outline=F, addgrid.col = "black",
+        # order="hclust", 
+         #hclust.method="ward.D2",
+         mar = c(2,0,2,0),
+         addrect = 8, rect.col = "black", rect.lwd = 5,
+         col=colorRampPalette(c("goldenrod3", "white", "indianred4"))(20),
+         bg="white",
+         tl.col=colortest, tl.srt=45, tl.cex=0.5, cl.cex=0.8)
+```
+
+
+
+=> Pas d'anticorrélation entre CT
+
+##Sortir les clusters
+```{r}
+#initialisation
+mt=t(miniEE_r)
+
+#choisir les méthodes
+Method_dist="euclidean"
+Method_asso="ward.D2"
+
+#Clusters
+col=hclust(dist(mt, method=Method_dist),
+            method=Method_asso)
+
+# Vérifier qu'on trouve les m^mes clusters
+plot(col)
+abline(h=7.8, col="red")
+```
+
+
+#CoExp / Subtype
+##LumA
+```{r}
+datacorr=data.matrix(t((EE_elected_CT[,which(Subtype=="LumA")])))
+
+datacorr=data.matrix(t((Exp_elected_CT[,which(Subtype=="LumA")])))
+
+
+EEcor=rcorr(datacorr, type = "spearman") #on calcule les corrélations
+diag(EEcor$r) = 0
+
+EEcorplate = data.frame(var1 = melt(EEcor$r)$Var1,
+                        var2 = melt(EEcor$r)$Var2,
+                        rvalues = melt(EEcor$r)$value,
+                        pvalues =melt(EEcor$P)$value )
+
+#Toutes les corr
+data_plot=EEcor$r
+diag(data_plot) = 1 #on remet les 1 enlever pour les autocor
+
+corrplot(data_plot, title="73 Selected CT / LumA",          
+        # type = "upper", 
+         method="square",outline=F,addgrid.col = NA,
+         order="hclust", 
+         hclust.method="ward.D2",
+         mar = c(1,0,1,0),
+       #  addrect = 4, rect.col = "black", rect.lwd = 5,
+         col=colorRampPalette(c("goldenrod3", "white", "indianred4"))(20),
+         bg="white",
+         tl.col="black", tl.srt=45, tl.cex=0.5, 
+        cl.cex=1)
+
+
+#on sort tous les autres gènes qui sont corrélés aux gènes testés
+miniEEcor = subset(subset(EEcorplate[,], 
+                        pvalues<0.01), 
+                        abs(rvalues)>0.4)
+
+
+miniEE_r=dcast(miniEEcor[,1:3], var1~var2, 
+               value.var="rvalues")
+
+rownames(miniEE_r)=miniEE_r$var1
+miniEE_r=miniEE_r[,-1]
+
+miniEE_r=data.matrix(miniEE_r)
+miniEE_r[which(is.na(miniEE_r)==T)]=0
+
+diag(miniEE_r) = 1 #on remet les 1 enlever pour les autocor
+
+dim(miniEE_r)
+
+####Ordonner la matrice
+
+#Choisir les méthodes de clustering
+Method_dist="euclidian"
+Method_asso="ward.D2"
+
+tree = hclust(
+              dist(miniEE_r,
+              method = Method_dist),
+      method = Method_asso)
+
+miniEE_r=miniEE_r[tree$order, tree$order]
+
+colortest=rep("black", dim(miniEE_r)[1])
+
+corrplot(miniEE_r, title="Signif CT / LumA",
+        type = "upper", 
+         method="square",outline=F, addgrid.col = "black",
+        # order="hclust", 
+         #hclust.method="ward.D2",
+         mar = c(2,0,2,0),
+         addrect = 8, rect.col = "black", rect.lwd = 5,
+         col=colorRampPalette(c("goldenrod3", "white", "indianred4"))(20),
+         bg="white",
+         tl.col=colortest, tl.srt=45, tl.cex=0.5, cl.cex=0.8)
+
+
+#Crohomo map
+ CTall_GenomicInfos_sub = subset(CTall_GenomicInfos, chrom %in% c(paste("chr", c(1:22), sep = ""), "chrX", "chrY"))
+ #---------------------------------
+ #Pour tous les CT
+ points_chromosomes = str_sub(as.character(CTall_GenomicInfos_sub$chrom)[], 4)
+ points_coordinates = CTall_GenomicInfos_sub$txStart[]
+ 
+ points_values = 0:5
+ tracklist = BioCircosSNPTrack('mySNPTrack_all', points_chromosomes, points_coordinates, 
+   points_values, colors = "grey", opacities = 0.3, minRadius = 0.7, maxRadius = 0.9)
+ 
+ #---------------------------------
+ #Pour les seklected
+ # Chromosomes on which the points should be displayed
+ points_chromosomes_select =  str_sub(as.character(CTselected_GenomicInfos$chrom), 4)
+ # Coordinates on which the points should be displayed
+ points_coordinates_select  = CTselected_GenomicInfos$txStart
+ 
+ # Values associated with each point, used as radial coordinate 
+ #   on a scale going to minRadius for the lowest value to maxRadius for the highest value
+ points_values_select = 0:5
+ tracklist = tracklist+ BioCircosSNPTrack('mySNPTrack', points_chromosomes_select , points_coordinates_select , 
+   points_values_select, colors = c("darkred"), opacities = 0.5, size = 3, minRadius = 0.7, maxRadius = 0.9)
+ 
+ #---------------------------------
+ #Pour les Corr
+ # Chromosomes on which the points should be displayed
+ points_chromosomes_corr =  str_sub(as.character(subset(CTselected_GenomicInfos, geneSymbol %in% unique(miniEEcor$var1))$chrom), 4)
+ # Coordinates on which the points should be displayed
+ points_coordinates_corr  = subset(CTselected_GenomicInfos, geneSymbol %in% unique(miniEEcor$var1))$txStart
+ 
+ # Values associated with each point, used as radial coordinate 
+ #   on a scale going to minRadius for the lowest value to maxRadius for the highest value
+ points_values_corr = 0:5
+ tracklist = tracklist+ BioCircosSNPTrack('mySNPTrack', points_chromosomes_corr , points_coordinates_corr , 
+   points_values_corr, colors = c("darkcyan"), opacities = 0.5, size = 3, minRadius = 0.7, maxRadius = 0.9)
+  
+ #---------------------------------
+ # Background are always placed below other tracks
+ tracklist = tracklist + BioCircosBackgroundTrack("myBackgroundTrack_all", 
+   minRadius = 0.7, maxRadius = 0.9,
+   borderColors = "#AAAAAA", borderSize = 0.3, fillColors = "white")
+ 
+ #---------------------------------
+ 
+ # Link tracks 
+ Links_names = data.frame(Parten1 = miniEEcor$var1,
+                              Parten2 = miniEEcor$var2)
+ 
+ id_1 = NULL
+ id_2 = NULL
+ for (i in seq_along(Links_names$Parten1)) {
+ id_1 = c(id_1, which(CTselected_GenomicInfos$geneSymbol == as.character(Links_names$Parten1[i]) ))
+ id_2 = c(id_2, which(CTselected_GenomicInfos$geneSymbol == as.character(Links_names$Parten2[i]) ))
+ }
+
+ linkPos1 = CTselected_GenomicInfos[id_1,]$txStart
+ linkPos2 =  CTselected_GenomicInfos[id_2,]$txStart
+ 
+ chr1 = str_sub(as.character( CTselected_GenomicInfos[id_1,]$chrom), 4)
+ 
+ chr2 = str_sub(as.character( CTselected_GenomicInfos[id_2,]$chrom), 4)
+
+tracklist = tracklist + 
+   BioCircosLinkTrack("testLink", gene1Chromosomes = chr1, 
+   gene1Starts = linkPos1, gene1Ends = linkPos1+1, gene2Chromosomes = chr2, 
+   axisPadding = 6, color = c("darkcyan"), width = exp(miniEEcor$rvalues*10), alpha = 0.5, 
+  labels = paste(chr1, chr2, sep = "-"), displayLabel = F,
+   gene2Starts = linkPos2, gene2Ends = linkPos2+1, maxRadius = 0.65)
+
+BioCircos(tracklist, genomeFillColor = "black",
+  chrPad = 0.05, displayGenomeBorder = FALSE, yChr =  TRUE,
+   genomeTicksDisplay = FALSE,  genomeLabelTextSize = 18, genomeLabelDy = 0)
+```
+
+##LumB
+```{r}
+id = "LumB"
+datacorr=data.matrix(t((EE_elected_CT[,which(Subtype== id)])))
+
+datacorr=data.matrix(t((Exp_elected_CT[,which(Subtype== id)])))
+
+
+EEcor=rcorr(datacorr, type = "spearman") #on calcule les corrélations
+diag(EEcor$r) = 0
+
+EEcorplate = data.frame(var1 = melt(EEcor$r)$Var1,
+                        var2 = melt(EEcor$r)$Var2,
+                        rvalues = melt(EEcor$r)$value,
+                        pvalues =melt(EEcor$P)$value )
+
+#Toutes les corr
+data_plot=EEcor$r
+diag(data_plot) = 1 #on remet les 1 enlever pour les autocor
+
+corrplot(data_plot, title=paste("73 Selected CT", id, sep = " / "),          
+        # type = "upper", 
+         method="square",outline=F,addgrid.col = NA,
+         order="hclust", 
+         hclust.method="ward.D2",
+         mar = c(1,0,1,0),
+       #  addrect = 4, rect.col = "black", rect.lwd = 5,
+         col=colorRampPalette(c("goldenrod3", "white", "indianred4"))(20),
+         bg="white",
+         tl.col="black", tl.srt=45, tl.cex=0.5, 
+        cl.cex=1)
+
+
+#on sort tous les autres gènes qui sont corrélés aux gènes testés
+miniEEcor = subset(subset(EEcorplate[,], 
+                        pvalues<0.01), 
+                        abs(rvalues)>0.4)
+
+
+miniEE_r=dcast(miniEEcor[,1:3], var1~var2, 
+               value.var="rvalues")
+
+rownames(miniEE_r)=miniEE_r$var1
+miniEE_r=miniEE_r[,-1]
+
+miniEE_r=data.matrix(miniEE_r)
+miniEE_r[which(is.na(miniEE_r)==T)]=0
+
+diag(miniEE_r) = 1 #on remet les 1 enlever pour les autocor
+
+dim(miniEE_r)
+
+####Ordonner la matrice
+
+#Choisir les méthodes de clustering
+Method_dist="euclidian"
+Method_asso="ward.D2"
+
+tree = hclust(
+              dist(miniEE_r,
+              method = Method_dist),
+      method = Method_asso)
+
+miniEE_r=miniEE_r[tree$order, tree$order]
+
+colortest=rep("black", dim(miniEE_r)[1])
+
+corrplot(miniEE_r, title=paste("Signif CT", id, sep = " / "),
+        type = "upper", 
+         method="square",outline=F, addgrid.col = "black",
+        # order="hclust", 
+         #hclust.method="ward.D2",
+         mar = c(2,0,2,0),
+         addrect = 8, rect.col = "black", rect.lwd = 5,
+         col=colorRampPalette(c("goldenrod3", "white", "indianred4"))(20),
+         bg="white",
+         tl.col=colortest, tl.srt=45, tl.cex=0.5, cl.cex=0.8)
+
+#Crohomo map
+ CTall_GenomicInfos_sub = subset(CTall_GenomicInfos, chrom %in% c(paste("chr", c(1:22), sep = ""), "chrX", "chrY"))
+ #---------------------------------
+ #Pour tous les CT
+ points_chromosomes = str_sub(as.character(CTall_GenomicInfos_sub$chrom)[], 4)
+ points_coordinates = CTall_GenomicInfos_sub$txStart[]
+ 
+ points_values = 0:15
+ tracklist = BioCircosSNPTrack('mySNPTrack_all', points_chromosomes, points_coordinates, 
+   points_values, colors = "grey", opacities = 0.3, minRadius = 0.3, maxRadius = 0.9)
+ 
+ #---------------------------------
+ #Pour les seklected
+ # Chromosomes on which the points should be displayed
+ points_chromosomes_select =  str_sub(as.character(CTselected_GenomicInfos$chrom), 4)
+ # Coordinates on which the points should be displayed
+ points_coordinates_select  = CTselected_GenomicInfos$txStart
+ 
+ # Values associated with each point, used as radial coordinate 
+ #   on a scale going to minRadius for the lowest value to maxRadius for the highest value
+ points_values_select = 0:15
+ tracklist = tracklist+ BioCircosSNPTrack('mySNPTrack', points_chromosomes_select , points_coordinates_select , 
+   points_values_select, colors = c("darkred"), opacities = 0.5, size = 3, minRadius = 0.3, maxRadius = 0.9)
+ 
+ #---------------------------------
+ #Pour les Corr
+ # Chromosomes on which the points should be displayed
+ points_chromosomes_corr =  str_sub(as.character(subset(CTselected_GenomicInfos, geneSymbol %in% unique(miniEEcor$var1))$chrom), 4)
+ # Coordinates on which the points should be displayed
+ points_coordinates_corr  = subset(CTselected_GenomicInfos, geneSymbol %in% unique(miniEEcor$var1))$txStart
+ 
+ # Values associated with each point, used as radial coordinate 
+ #   on a scale going to minRadius for the lowest value to maxRadius for the highest value
+ points_values_corr = 0:15
+ tracklist = tracklist+ BioCircosSNPTrack('mySNPTrack', points_chromosomes_corr , points_coordinates_corr , 
+   points_values_corr, colors = c("darkcyan"), opacities = 0.5, size = 3, minRadius = 0.3, maxRadius = 0.9)
+  
+ #---------------------------------
+ # Background are always placed below other tracks
+ tracklist = tracklist + BioCircosBackgroundTrack("myBackgroundTrack_all", 
+   minRadius = 0.3, maxRadius = 0.9,
+   borderColors = "#AAAAAA", borderSize = 0.3, fillColors = "white")
+ 
+ #---------------------------------
+ 
+ # Link tracks 
+ Links_names = data.frame(Parten1 = miniEEcor$var1,
+                              Parten2 = miniEEcor$var2)
+ 
+ id_1 = NULL
+ id_2 = NULL
+ for (i in seq_along(Links_names$Parten1)) {
+ id_1 = c(id_1, which(CTselected_GenomicInfos$geneSymbol == as.character(Links_names$Parten1[i]) ))
+ id_2 = c(id_2, which(CTselected_GenomicInfos$geneSymbol == as.character(Links_names$Parten2[i]) ))
+ }
+
+ linkPos1 = CTselected_GenomicInfos[id_1,]$txStart
+ linkPos2 =  CTselected_GenomicInfos[id_2,]$txStart
+ 
+ chr1 = str_sub(as.character( CTselected_GenomicInfos[id_1,]$chrom), 4)
+ 
+ chr2 = str_sub(as.character( CTselected_GenomicInfos[id_2,]$chrom), 4)
+
+tracklist = tracklist + 
+   BioCircosLinkTrack("testLink", gene1Chromosomes = chr1, 
+   gene1Starts = linkPos1, gene1Ends = linkPos1+1, gene2Chromosomes = chr2, 
+   axisPadding = 6, color = c("darkcyan"), width = exp(miniEEcor$rvalues*10), alpha = 0.5, 
+  labels = paste(chr1, chr2, sep = "-"), displayLabel = F,
+   gene2Starts = linkPos2, gene2Ends = linkPos2+1, maxRadius = 0.25)
+
+BioCircos(tracklist, genomeFillColor = "black",
+  chrPad = 0.05, displayGenomeBorder = FALSE, yChr =  TRUE,
+   genomeTicksDisplay = FALSE,  genomeLabelTextSize = 18, genomeLabelDy = 0)
+
+```
+
+##HER2
+
+```{r}
+id = "Her2"
+datacorr=data.matrix(t((EE_elected_CT[,which(Subtype== id)])))
+datacorr=data.matrix(t((Exp_elected_CT[,which(Subtype== id)])))
+
+
+EEcor=rcorr(datacorr, type = "spearman") #on calcule les corrélations
+diag(EEcor$r) = 0
+
+EEcorplate = data.frame(var1 = melt(EEcor$r)$Var1,
+                        var2 = melt(EEcor$r)$Var2,
+                        rvalues = melt(EEcor$r)$value,
+                        pvalues =melt(EEcor$P)$value )
+
+#Toutes les corr
+data_plot=EEcor$r
+diag(data_plot) = 1 #on remet les 1 enlever pour les autocor
+
+#Pour supprimer les NaN qui bugg le corrplot
+data_plot[,which(is.na(data_plot[1,])==T)] = 0
+data_plot[which(is.na(data_plot[,1])==T),] = 0
+
+corrplot(data_plot, title=paste("73 Selected CT", id, sep = " / "),          
+        # type = "upper", 
+         method="square",outline=F,addgrid.col = NA,
+         order="hclust", 
+         hclust.method="ward.D2",
+         mar = c(1,0,1,0),
+       #  addrect = 4, rect.col = "black", rect.lwd = 5,
+         col=colorRampPalette(c("goldenrod3", "white", "indianred4"))(20),
+         bg="white",
+         tl.col="black", tl.srt=45, tl.cex=0.5, 
+        cl.cex=1)
+
+
+#on sort tous les autres gènes qui sont corrélés aux gènes testés
+miniEEcor = subset(subset(EEcorplate[,], 
+                        pvalues<0.01), 
+                        abs(rvalues)>0.4)
+
+
+miniEE_r=dcast(miniEEcor[,1:3], var1~var2, 
+               value.var="rvalues")
+
+rownames(miniEE_r)=miniEE_r$var1
+miniEE_r=miniEE_r[,-1]
+
+miniEE_r=data.matrix(miniEE_r)
+miniEE_r[which(is.na(miniEE_r)==T)]=0
+
+diag(miniEE_r) = 1 #on remet les 1 enlever pour les autocor
+
+dim(miniEE_r)
+
+####Ordonner la matrice
+
+#Choisir les méthodes de clustering
+Method_dist="euclidian"
+Method_asso="ward.D2"
+
+tree = hclust(
+              dist(miniEE_r,
+              method = Method_dist),
+      method = Method_asso)
+
+miniEE_r=miniEE_r[tree$order, tree$order]
+
+colortest=rep("black", dim(miniEE_r)[1])
+
+corrplot(miniEE_r, title=paste("Signif CT", id, sep = " / "),
+        type = "upper", 
+         method="square",outline=F, addgrid.col = "black",
+        # order="hclust", 
+         #hclust.method="ward.D2",
+         mar = c(2,0,2,0),
+         addrect = 8, rect.col = "black", rect.lwd = 5,
+         col=colorRampPalette(c("goldenrod3", "white", "indianred4"))(20),
+         bg="white",
+         tl.col=colortest, tl.srt=45, tl.cex=0.5, cl.cex=0.8)
+
+#Crohomo map
+ CTall_GenomicInfos_sub = subset(CTall_GenomicInfos, chrom %in% c(paste("chr", c(1:22), sep = ""), "chrX", "chrY"))
+ #---------------------------------
+ #Pour tous les CT
+ points_chromosomes = str_sub(as.character(CTall_GenomicInfos_sub$chrom)[], 4)
+ points_coordinates = CTall_GenomicInfos_sub$txStart[]
+ 
+ points_values = 0:15
+ tracklist = BioCircosSNPTrack('mySNPTrack_all', points_chromosomes, points_coordinates, 
+   points_values, colors = "grey", opacities = 0.3, minRadius = 0.3, maxRadius = 0.9)
+ 
+ #---------------------------------
+ #Pour les seklected
+ # Chromosomes on which the points should be displayed
+ points_chromosomes_select =  str_sub(as.character(CTselected_GenomicInfos$chrom), 4)
+ # Coordinates on which the points should be displayed
+ points_coordinates_select  = CTselected_GenomicInfos$txStart
+ 
+ # Values associated with each point, used as radial coordinate 
+ #   on a scale going to minRadius for the lowest value to maxRadius for the highest value
+ points_values_select = 0:15
+ tracklist = tracklist+ BioCircosSNPTrack('mySNPTrack', points_chromosomes_select , points_coordinates_select , 
+   points_values_select, colors = c("darkred"), opacities = 0.5, size = 3, minRadius = 0.3, maxRadius = 0.9)
+ 
+ #---------------------------------
+ #Pour les Corr
+ # Chromosomes on which the points should be displayed
+ points_chromosomes_corr =  str_sub(as.character(subset(CTselected_GenomicInfos, geneSymbol %in% unique(miniEEcor$var1))$chrom), 4)
+ # Coordinates on which the points should be displayed
+ points_coordinates_corr  = subset(CTselected_GenomicInfos, geneSymbol %in% unique(miniEEcor$var1))$txStart
+ 
+ # Values associated with each point, used as radial coordinate 
+ #   on a scale going to minRadius for the lowest value to maxRadius for the highest value
+ points_values_corr = 0:15
+ tracklist = tracklist+ BioCircosSNPTrack('mySNPTrack', points_chromosomes_corr , points_coordinates_corr , 
+   points_values_corr, colors = c("darkcyan"), opacities = 0.5, size = 3, minRadius = 0.3, maxRadius = 0.9)
+  
+ #---------------------------------
+ # Background are always placed below other tracks
+ tracklist = tracklist + BioCircosBackgroundTrack("myBackgroundTrack_all", 
+   minRadius = 0.3, maxRadius = 0.9,
+   borderColors = "#AAAAAA", borderSize = 0.3, fillColors = "white")
+ 
+ #---------------------------------
+ 
+ # Link tracks 
+ Links_names = data.frame(Parten1 = miniEEcor$var1,
+                              Parten2 = miniEEcor$var2)
+ 
+ id_1 = NULL
+ id_2 = NULL
+ for (i in seq_along(Links_names$Parten1)) {
+ id_1 = c(id_1, which(CTselected_GenomicInfos$geneSymbol == as.character(Links_names$Parten1[i]) ))
+ id_2 = c(id_2, which(CTselected_GenomicInfos$geneSymbol == as.character(Links_names$Parten2[i]) ))
+ }
+
+ linkPos1 = CTselected_GenomicInfos[id_1,]$txStart
+ linkPos2 =  CTselected_GenomicInfos[id_2,]$txStart
+ 
+ chr1 = str_sub(as.character( CTselected_GenomicInfos[id_1,]$chrom), 4)
+ 
+ chr2 = str_sub(as.character( CTselected_GenomicInfos[id_2,]$chrom), 4)
+
+tracklist = tracklist + 
+   BioCircosLinkTrack("testLink", gene1Chromosomes = chr1, 
+   gene1Starts = linkPos1, gene1Ends = linkPos1+1, gene2Chromosomes = chr2, 
+   axisPadding = 6, color = c("darkcyan"), width = exp(miniEEcor$rvalues*10), alpha = 0.5, 
+  labels = paste(chr1, chr2, sep = "-"), displayLabel = F,
+   gene2Starts = linkPos2, gene2Ends = linkPos2+1, maxRadius = 0.25)
+
+BioCircos(tracklist, genomeFillColor = "black",
+  chrPad = 0.05, displayGenomeBorder = FALSE, yChr =  TRUE,
+   genomeTicksDisplay = FALSE,  genomeLabelTextSize = 18, genomeLabelDy = 0)
+```
+
+##Basal
+```{r}
+id = "Basal"
+datacorr=data.matrix(t((EE_elected_CT[,which(Subtype== id)])))
+datacorr=data.matrix(t((Exp_elected_CT[,which(Subtype== id)])))
+
+
+EEcor=rcorr(datacorr, type = "spearman") #on calcule les corrélations
+diag(EEcor$r) = 0
+
+EEcorplate = data.frame(var1 = melt(EEcor$r)$Var1,
+                        var2 = melt(EEcor$r)$Var2,
+                        rvalues = melt(EEcor$r)$value,
+                        pvalues =melt(EEcor$P)$value )
+
+#Toutes les corr
+data_plot=EEcor$r
+diag(data_plot) = 1 #on remet les 1 enlever pour les autocor
+
+data_plot[,which(is.na(data_plot[1,])==T)] = 0
+data_plot[which(is.na(data_plot[,1])==T),] = 0
+
+corrplot(data_plot, title=paste("73 Selected CT", id, sep = " / "),          
+        # type = "upper", 
+         method="square",outline=F,addgrid.col = NA,
+         order="hclust", 
+         hclust.method="ward.D2",
+         mar = c(1,0,1,0),
+       #  addrect = 4, rect.col = "black", rect.lwd = 5,
+         col=colorRampPalette(c("goldenrod3", "white", "indianred4"))(20),
+         bg="white",
+         tl.col="black", tl.srt=45, tl.cex=0.5, 
+        cl.cex=1)
+
+
+#on sort tous les autres gènes qui sont corrélés aux gènes testés
+miniEEcor = subset(subset(EEcorplate[,], 
+                        pvalues<0.01), 
+                        abs(rvalues)>0.4)
+
+
+miniEE_r=dcast(miniEEcor[,1:3], var1~var2, 
+               value.var="rvalues")
+
+rownames(miniEE_r)=miniEE_r$var1
+miniEE_r=miniEE_r[,-1]
+
+miniEE_r=data.matrix(miniEE_r)
+miniEE_r[which(is.na(miniEE_r)==T)]=0
+
+diag(miniEE_r) = 1 #on remet les 1 enlever pour les autocor
+
+dim(miniEE_r)
+
+####Ordonner la matrice
+
+#Choisir les méthodes de clustering
+Method_dist="euclidian"
+Method_asso="ward.D2"
+
+tree = hclust(
+              dist(miniEE_r,
+              method = Method_dist),
+      method = Method_asso)
+
+miniEE_r=miniEE_r[tree$order, tree$order]
+
+colortest=rep("black", dim(miniEE_r)[1])
+
+corrplot(miniEE_r, title=paste("Signif CT", id, sep = " / "),
+        type = "upper", 
+         method="square",outline=F, addgrid.col = "black",
+        # order="hclust", 
+         #hclust.method="ward.D2",
+         mar = c(2,0,2,0),
+         addrect = 8, rect.col = "black", rect.lwd = 5,
+         col=colorRampPalette(c("goldenrod3", "white", "indianred4"))(20),
+         bg="white",
+         tl.col=colortest, tl.srt=45, tl.cex=0.5, cl.cex=0.8)
+
+
+#Crohomo map
+ CTall_GenomicInfos_sub = subset(CTall_GenomicInfos, chrom %in% c(paste("chr", c(1:22), sep = ""), "chrX", "chrY"))
+ #---------------------------------
+ #Pour tous les CT
+ points_chromosomes = str_sub(as.character(CTall_GenomicInfos_sub$chrom)[], 4)
+ points_coordinates = CTall_GenomicInfos_sub$txStart[]
+ 
+ points_values = 0:15
+ tracklist = BioCircosSNPTrack('mySNPTrack_all', points_chromosomes, points_coordinates, 
+   points_values, colors = "grey", opacities = 0.3, minRadius = 0.3, maxRadius = 0.9)
+ 
+ #---------------------------------
+ #Pour les seklected
+ # Chromosomes on which the points should be displayed
+ points_chromosomes_select =  str_sub(as.character(CTselected_GenomicInfos$chrom), 4)
+ # Coordinates on which the points should be displayed
+ points_coordinates_select  = CTselected_GenomicInfos$txStart
+ 
+ # Values associated with each point, used as radial coordinate 
+ #   on a scale going to minRadius for the lowest value to maxRadius for the highest value
+ points_values_select = 0:15
+ tracklist = tracklist+ BioCircosSNPTrack('mySNPTrack', points_chromosomes_select , points_coordinates_select , 
+   points_values_select, colors = c("darkred"), opacities = 0.5, size = 3, minRadius = 0.3, maxRadius = 0.9)
+ 
+ #---------------------------------
+ #Pour les Corr
+ # Chromosomes on which the points should be displayed
+ points_chromosomes_corr =  str_sub(as.character(subset(CTselected_GenomicInfos, geneSymbol %in% unique(miniEEcor$var1))$chrom), 4)
+ # Coordinates on which the points should be displayed
+ points_coordinates_corr  = subset(CTselected_GenomicInfos, geneSymbol %in% unique(miniEEcor$var1))$txStart
+ 
+ # Values associated with each point, used as radial coordinate 
+ #   on a scale going to minRadius for the lowest value to maxRadius for the highest value
+ points_values_corr = 0:15
+ tracklist = tracklist+ BioCircosSNPTrack('mySNPTrack', points_chromosomes_corr , points_coordinates_corr , 
+   points_values_corr, colors = c("darkcyan"), opacities = 0.5, size = 3, minRadius = 0.3, maxRadius = 0.9)
+  
+ #---------------------------------
+ # Background are always placed below other tracks
+ tracklist = tracklist + BioCircosBackgroundTrack("myBackgroundTrack_all", 
+   minRadius = 0.3, maxRadius = 0.9,
+   borderColors = "#AAAAAA", borderSize = 0.3, fillColors = "white")
+ 
+ #---------------------------------
+ 
+ # Link tracks 
+ Links_names = data.frame(Parten1 = miniEEcor$var1,
+                              Parten2 = miniEEcor$var2)
+ 
+ id_1 = NULL
+ id_2 = NULL
+ for (i in seq_along(Links_names$Parten1)) {
+ id_1 = c(id_1, which(CTselected_GenomicInfos$geneSymbol == as.character(Links_names$Parten1[i]) ))
+ id_2 = c(id_2, which(CTselected_GenomicInfos$geneSymbol == as.character(Links_names$Parten2[i]) ))
+ }
+
+ linkPos1 = CTselected_GenomicInfos[id_1,]$txStart
+ linkPos2 =  CTselected_GenomicInfos[id_2,]$txStart
+ 
+ chr1 = str_sub(as.character( CTselected_GenomicInfos[id_1,]$chrom), 4)
+ 
+ chr2 = str_sub(as.character( CTselected_GenomicInfos[id_2,]$chrom), 4)
+
+tracklist = tracklist + 
+   BioCircosLinkTrack("testLink", gene1Chromosomes = chr1, 
+   gene1Starts = linkPos1, gene1Ends = linkPos1+1, gene2Chromosomes = chr2, 
+   axisPadding = 6, color = c("darkcyan"), width = exp(miniEEcor$rvalues*10), alpha = 0.5, 
+  labels = paste(chr1, chr2, sep = "-"), displayLabel = F,
+   gene2Starts = linkPos2, gene2Ends = linkPos2+1, maxRadius = 0.25)
+
+BioCircos(tracklist, genomeFillColor = "black",
+  chrPad = 0.05, displayGenomeBorder = FALSE, yChr =  TRUE,
+   genomeTicksDisplay = FALSE,  genomeLabelTextSize = 18, genomeLabelDy = 0)
+
+
+```
+
+
+
+#Circos
+
+
+```{r}
+library(BioCircos)
+BioCircos()
+CTselected_GenomicInfos <- read.delim("C:/Users/marth/Desktop/These_Marthe/1_Bioinfo/181115_TCGApostSeminaire/CTselected_GenomicInfos.txt", header=T, sep = "\t")
+head(CTselected_GenomicInfos)
+```
+
+```{r}
+# Arcs coordinates
+snvChr = as.factor(str_sub(as.character(CTselected_GenomicInfos$chrom), 4))
+snvStart = CTselected_GenomicInfos$txStart
+snvEnd =CTselected_GenomicInfos$cdsEnd +10000000
+# Values associated with each point, used as radial coordinate 
+#   on a scale going to minRadius for the lowest value to maxRadius for the highest value
+snvValues = (1:length(snvStart)%%5)+1
+# Create CNV track
+tracks = BioCircosCNVTrack('cnv_track', as.character(snvChr), snvStart, snvEnd, snvValues, 
+  color = "#CC0000", range = c(0,length(snvChr)))
+# Add background
+tracks = tracks + BioCircosBackgroundTrack("arcs_background", colors = "#2222EE")
+BioCircos(tracks, genomeFillColor = "YlOrBr", genomeTicksDisplay = F, genomeLabelDy = 0)
+```
+```{r}
+arcs_chromosomes = c('X', 'X', '2', '9') # Chromosomes on which the arcs should be displayed
+arcs_begin = c(1, 45270560, 140253678, 20484611)
+arcs_end = c(155270560, 145270560, 154978472, 42512974)
+arcs_chromosomes = str_sub(as.character(CTselected_GenomicInfos$chrom), 4)
+arcs_begin = CTselected_GenomicInfos$cdsStart
+arcs_end =CTselected_GenomicInfos$cdsEnd + 1000000
+tracklist = BioCircosArcTrack('myArcTrack', arcs_chromosomes, arcs_begin, arcs_end,
+  minRadius = 1.18, maxRadius = 1.25, colors = "darkred", opacities = rep(0.6, length(arcs_begin)))
+BioCircos(tracklist,  genomeFillColor = "white",
+  chrPad = 0.05, displayGenomeBorder = F, yChr =  T,
+  genomeTicksDisplay = F,  genomeLabelTextSize = 16)
+```
+
+Note pour plus tard : on pourrait aussi utiliser EEcoreplate pour extraire les couples
+```{r}
+library(BioCircos)
+# Chromosomes on which the points should be displayed
+points_chromosomes =  str_sub(as.character(CTselected_GenomicInfos$chrom), 4)
+# Coordinates on which the points should be displayed
+points_coordinates = CTselected_GenomicInfos$txStart
+# Values associated with each point, used as radial coordinate 
+#   on a scale going to minRadius for the lowest value to maxRadius for the highest value
+points_values = 0:12
+tracklist = BioCircosSNPTrack('mySNPTrack', points_chromosomes, points_coordinates, 
+  points_values, colors = c("darkred"), minRadius = 0.5, maxRadius = 0.9)
+# Background are always placed below other tracks
+tracklist = tracklist + BioCircosBackgroundTrack("myBackgroundTrack", 
+  minRadius = 0.5, maxRadius = 0.9,
+  borderColors = "#AAAAAA", borderSize = 0.6, fillColors = "white") 
+
+
+# Link tracks : inter-chromo
+Data_interchrom = data.frame(Parten1 = c("HORMAD1", "C4orf60", "AKAP1", "XAGE2", "DCAF4L2", 
+                                         "DCAF4L2", "MAGEC2", "SSX1", "SSX1", "SSX2",
+                                         "MAGEA12", "MAGEA2", "MAGEA6"),
+                             Parten2 = c("CXorf61", "CXorf61", "C1orf158", "HORMAD1", "NAA11",
+                                         "COX7B2", "DCAF4L2", "DCAF4L2", "NAA11", "COx7B2",
+                                         "COX7B2", "COX7B2", "COX7B2"))
+
+Data_intrachrom = data.frame(partne1 = c(rep("MAGEA12", 6),
+                                         rep("MAGEA2", 7),
+                                         rep("MAGEA3", 5),
+                                         rep("MAGEA6", 3),
+                                         "XAGE1D", "XAGE1D", "SPANXA2",
+                                         "MAGEA4", "MAGEA4", "PAGE2", "SSX1",
+                                         "CT45A4", "CT45A4", "CT45A4", "CT45A5", "CT45A5", "CT45A1"),
+                             parten2 =c("MAGEA2", "MAGEA6", "MAGEA3", "SSX1", "SSX2", "CSAG1",
+                                        "MAGEA6", "MAGEA3", "SSX1", "SSX2", "CSAG1", "CSAG2", "MAGEA1",
+                                        "MAGEA6", "SSX1", "SSX2", "CSAG2", "MAGEA1",
+                                        "SSX1", "CSAG2", "MAGEA1", "SSX1", "SSX2", "SPANXC",
+                                        "MAGE9B", "MAGEA10", "PAGE2B", "SSX2",
+                                        "CT45A5", "CT45A1", "CT45A3", "CT45A1", "CT45A3", "CT45A3") )
+
+linkPos1 = subset(CTselected_GenomicInfos, geneSymbol %in% Data_interchrom$Parten1)$txStart
+
+linkPos2 =  subset(CTselected_GenomicInfos, geneSymbol %in% Data_interchrom$Parten2)$txStart
+
+chr1 = str_sub(as.character(subset(CTselected_GenomicInfos, 
+                                   geneSymbol %in% Data_interchrom$Parten1)$chrom), 4)
+
+chr2 = str_sub(as.character(subset(CTselected_GenomicInfos, 
+                                   geneSymbol %in% Data_interchrom$Parten2)$chrom), 4)
+
+tracklist = tracklist + BioCircosLinkTrack("testLink", gene1Chromosomes = chr1, 
+  gene1Starts = linkPos1, gene1Ends = linkPos1+1, gene2Chromosomes = chr2, axisPadding = 6,
+  color = "red", width = "0.1em", labels = paste(chr1, chr2, sep = "-"), displayLabel = F,
+  gene2Starts = linkPos2, gene2Ends = linkPos2+1, maxRadius = 0.42)
+
+
+
+BioCircos(tracklist, genomeFillColor = "black",
+  chrPad = 0.05, displayGenomeBorder = FALSE, yChr =  FALSE,
+  genomeTicksDisplay = FALSE,  genomeLabelTextSize = 18, genomeLabelDy = 0)
+```
+
+
+##Automatique : 
+miniEEcor contient les co-expressions les plus significatives
+```{r}
+# Chromosomes on which the points should be displayed
+points_chromosomes =  str_sub(as.character(CTselected_GenomicInfos$chrom), 4)
+# Coordinates on which the points should be displayed
+points_coordinates = CTselected_GenomicInfos$txStart
+
+# Values associated with each point, used as radial coordinate 
+#   on a scale going to minRadius for the lowest value to maxRadius for the highest value
+points_values = 0:12
+tracklist = BioCircosSNPTrack('mySNPTrack', points_chromosomes, points_coordinates, 
+  points_values, colors = c("darkred"), minRadius = 0.5, maxRadius = 0.9)
+
+# Background are always placed below other tracks
+tracklist = tracklist + BioCircosBackgroundTrack("myBackgroundTrack", 
+  minRadius = 0.5, maxRadius = 0.9,
+  borderColors = "#AAAAAA", borderSize = 0.6, fillColors = "white") 
+
+
+# Link tracks : inter-chromo
+Links_names = data.frame(Parten1 = miniEEcor$var1,
+                             Parten2 = miniEEcor$var2)
+
+linkPos1 = subset(CTselected_GenomicInfos, geneSymbol %in% Data_interchrom$Parten1)$txStart
+
+linkPos2 =  subset(CTselected_GenomicInfos, geneSymbol %in% Data_interchrom$Parten2)$txStart
+
+chr1 = str_sub(as.character(subset(CTselected_GenomicInfos, 
+                                   geneSymbol %in% Data_interchrom$Parten1)$chrom), 4)
+
+chr2 = str_sub(as.character(subset(CTselected_GenomicInfos, 
+                                   geneSymbol %in% Data_interchrom$Parten2)$chrom), 4)
+
+tracklist = tracklist + 
+  BioCircosLinkTrack("testLink", gene1Chromosomes = chr1, 
+  gene1Starts = linkPos1, gene1Ends = linkPos1+1, gene2Chromosomes = chr2, 
+  axisPadding = 6,color = "red", width = miniEEcor$rvalues, 
+  labels = paste(chr1, chr2, sep = "-"), displayLabel = F,
+  gene2Starts = linkPos2, gene2Ends = linkPos2+1, maxRadius = 0.42)
+
+
+
+BioCircos(tracklist, genomeFillColor = "black",
+  chrPad = 0.05, displayGenomeBorder = FALSE, yChr =  FALSE,
+  genomeTicksDisplay = FALSE,  genomeLabelTextSize = 18, genomeLabelDy = 0)
+```
+
+
+#Chromomap
+
+On représente linéairement les position des 73 sélected CT, s ur une carte interactive (Shiny)
+```{r}
+library(chromoMap)
+data = data.frame(name =CTselected_GenomicInfos$geneSymbol[- which(duplicated(CTselected_GenomicInfos$geneSymbol)==T)],
+                  chrom = CTselected_GenomicInfos$chrom[- which(duplicated(CTselected_GenomicInfos$geneSymbol)==T)],
+                  start =  CTselected_GenomicInfos$txStart[- which(duplicated(CTselected_GenomicInfos$geneSymbol)==T)],
+                  data = rep(1, length( CTselected_GenomicInfos$cdsStart[- which(duplicated(CTselected_GenomicInfos$geneSymbol)==T)])))
+chromoMap(data,type = "annotation", chCol = "white",chBorder = "black", annoColor = "orange")
+```
+
+#Heatmap frequence
+```{r}
+frequ_subtype = read.table( "C:/Users/marth/Desktop/These_Marthe/1_Bioinfo/181115_TCGApostSeminaire/Table_Tum_Freq_FPKM_byTyope.txt", 
+            sep = "\t",   h = T)
+
+head(frequ_subtype)
+
+```
+
+##En pratique
+```{r}
+clab=data.frame( Subtype = colnames(frequ_subtype)[-c(1, 6)]) 
+
+
+Liste=list(Subtype=c("Basal"="hotpink4",
+                     "HER2"="cyan4",
+                     "LumA"="orange",
+                   "LumB"="goldenrod2"))
+
+data_heatmap = frequ_subtype[,-c(1, 6)]
+rownames(data_heatmap) = frequ_subtype$Names
+
+  
+#Choisir les méthodes de clustering
+Method_dist="euclidean"
+Method_asso="ward.D2"
+#Calcul clust
+column_tree = hclust(
+                dist(t(data_heatmap),
+                method = Method_dist),
+              method = Method_asso)
+
+#Anno colonnes
+ha= HeatmapAnnotation(df = clab,
+                       col =  Liste,
+                      annotation_legend_param = list(title_gp = gpar(fontsize = 8),
+        labels_gp = gpar(fontsize = 6),grid_height = unit(2, "mm")))
+
+
+#Premiere heatmap : l'expression normalisée, en log2
+Heatmap(as.matrix(data_heatmap),
+   name="Frequence",
+   cluster_columns = data.pv$hclust,
+  # cluster_rows = boston.pv$hclust, 
+  # column_dend_reorder = T,
+   row_dend_reorder = F,
+   #clustering_distance_columns  = Method_dist,
+   #clustering_method_columns = Method_asso,
+   clustering_distance_rows   = Method_dist,
+   clustering_method_rows = Method_asso,
+   column_title = "BRCA Freq", #titre
+   column_title_gp = gpar(fontsize = 10),
+   # km = 5,
+    col = colorRamp2(c(0,0.2, 0.5,0.6,0.7,1), 
+                     c("black", "grey", "white", "orange", "red", "red4")),   row_title_gp = gpar(fontsize = c(6,6)),
+    show_column_names = TRUE, #nom des éch
+    show_row_names = T, 
+    row_names_gp = gpar(fontsize = 4),
+    top_annotation = ha, #en top, les anno Cancer / NT etc
+   top_annotation_height = unit(1.5, "cm"),
+    show_heatmap_legend = T,
+    heatmap_legend_param = list(legend_direction = "vertical",
+    legend_width = unit(3, "cm"), title_position = "topcenter",
+    fontsize = 6))
+```
+```{r}
+library(MASS)
+library(pvclust)
+data.pv <- pvclust(data_heatmap, nboot=100)
+plot(data.pv)
+```
+
+```{r}
+# VIM library for using 'aggr'
+library(VIM)
+aggr(t(data_heatmap))
+```
+```{r}
+set.seed(20)
+clusters <- kmeans(t(data_heatmap), 5)
+
+# Save the cluster number in the dataset as column 'Borough'
+data14$Borough <- as.factor(clusters$cluster)
+```
+
+#Boxplot
+
+##bouclette pour choisir
+
+```{r}
+
+list_plot = NULL
+for (i in seq_along( rownames(Exp_elected_CT))) {
+  
+
+  A = rownames(Exp_elected_CT)[i]
+  data = data.frame(Exp = Exp_elected_CT[which(rownames(Exp_elected_CT) == A),],
+                  Subtype = Subtype)
+#Nommer les NT
+  data$Subtype = as.character(data$Subtype)
+  data$Subtype[which(colData(data_brca)$shortLetterCode == "NT")] = "NT"
+  data$Subtype = as.factor(data$Subtype)
+
+  list_plot = c(list_plot, 
+              list(ggplot(data = data, aes(x = Subtype, y = Exp+1, fill = Subtype, color = Subtype))+
+    geom_boxplot(notch = TRUE, size = 1.2, outlier.colour = "white", color = "black")+
+    geom_jitter(alpha = 0.5, width = 0.1)+
+    coord_trans(y="log2")+
+    scale_x_discrete(limits= c("NT", "LumA", "LumB", "Her2", "Basal", "Normal") )+
+    scale_fill_manual(values=c("hotpink4","darkcyan","goldenrod3", "orange3", "grey50", "white"))+
+    scale_color_manual(values=c("hotpink3","cyan3","goldenrod2", "orange1", "grey70", "grey80"))+
+    labs(title=paste(A), x="Subtype",y="FPKM-UQ")+                         
+    theme_classic()+                                                     # thème blanc
+    theme(plot.title = element_text(size = 12, face = "bold",hjust=0.5),    #titre en gras, centré
+              text=element_text(),
+              axis.title = element_text(face="bold", size=10),        #titre des axes en gras
+              axis.text.x=element_text(angle=45, hjust=1,colour="black", size = 8),
+              axis.text.y=element_text(colour="black", size = 8),
+              legend.position = "none"))
+            )
+
+}
+
+
+a = 70 ; list_plot[[a]]
+  
+
+```
+
+##HORMAD1
+```{r}
+A = "HORMAD1"
+data = data.frame(Exp = Exp_elected_CT[which(rownames(Exp_elected_CT) == A),],
+                  Subtype = Subtype)
+#Nommer les NT
+data$Subtype = as.character(data$Subtype)
+data$Subtype[which(colData(data_brca)$shortLetterCode == "NT")] = "NT"
+data$Subtype = as.factor(data$Subtype)
+
+g1= ggplot(data = data, aes(x = Subtype, y = Exp+1, fill = Subtype, color = Subtype))+
+  geom_boxplot(notch = TRUE, size = 1.2, outlier.colour = "white", color = "black")+
+  geom_jitter( width = 0.1)+
+  coord_trans(y="log2")+
+  scale_x_discrete(limits= c("NT", "LumA", "LumB", "Her2", "Basal", "Normal") )+
+  scale_fill_manual(values=c("hotpink4","darkcyan","goldenrod3", "orange3", "grey50", "white"))+
+  scale_color_manual(values=c("hotpink3","cyan3","goldenrod2", "orange1", "grey70", "grey80"))+
+  labs(title=paste(A), x="Subtype",y="FPKM-UQ")+                         
+  theme_classic()+                                                     # thème blanc
+  theme(plot.title = element_text(size = 12, face = "bold",hjust=0.5),    #titre en gras, centré
+              text=element_text(),
+              axis.title = element_text(face="bold", size=10),        #titre des axes en gras
+              axis.text.x=element_text(angle=45, hjust=1,colour="black", size = 8),
+              axis.text.y=element_text(colour="black", size = 8),
+              legend.position = "none")
+g1
+
+
+```
+
+##CXorf61
+```{r}
+A = "CXorf61"
+data = data.frame(Exp = Exp_elected_CT[which(rownames(Exp_elected_CT) == A),],
+                  Subtype = Subtype)
+#Nommer les NT
+data$Subtype = as.character(data$Subtype)
+data$Subtype[which(colData(data_brca)$shortLetterCode == "NT")] = "NT"
+data$Subtype = as.factor(data$Subtype)
+
+g2 = ggplot(data = data, aes(x = Subtype, y = Exp+1, fill = Subtype, color = Subtype))+
+  geom_boxplot(notch = TRUE, size = 1.2, outlier.colour = "white", color = "black")+
+  geom_jitter( width = 0.1)+
+  coord_trans(y="log2")+
+  scale_x_discrete(limits= c("NT", "LumA", "LumB", "Her2", "Basal", "Normal") )+
+  scale_fill_manual(values=c("hotpink4","darkcyan","goldenrod3", "orange3", "grey50", "white"))+
+  scale_color_manual(values=c("hotpink3","cyan3","goldenrod2", "orange1", "grey70", "grey80"))+
+  labs(title=paste(A), x="Subtype",y="FPKM-UQ")+                         
+  theme_classic()+                                                     # thème blanc
+  theme(plot.title = element_text(size = 12, face = "bold",hjust=0.5),    #titre en gras, centré
+              text=element_text(),
+              axis.title = element_text(face="bold", size=10),        #titre des axes en gras
+              axis.text.x=element_text(angle=45, hjust=1,colour="black", size = 8),
+              axis.text.y=element_text(colour="black", size = 8),
+              legend.position = "none")
+g2
+
+```
+
+##PLAC1
+```{r}
+A = "PLAC1"
+data = data.frame(Exp = Exp_elected_CT[which(rownames(Exp_elected_CT) == A),],
+                  Subtype = Subtype)
+#Nommer les NT
+data$Subtype = as.character(data$Subtype)
+data$Subtype[which(colData(data_brca)$shortLetterCode == "NT")] = "NT"
+data$Subtype = as.factor(data$Subtype)
+
+g3 = ggplot(data = data, aes(x = Subtype, y = Exp+1, fill = Subtype, color = Subtype))+
+  geom_boxplot(notch = TRUE, size = 1.2, outlier.colour = "white", color = "black")+
+  geom_jitter( width = 0.1)+
+  coord_trans(y="log2")+
+  scale_x_discrete(limits= c("NT", "LumA", "LumB", "Her2", "Basal", "Normal") )+
+  scale_fill_manual(values=c("hotpink4","darkcyan","goldenrod3", "orange3", "grey50", "white"))+
+  scale_color_manual(values=c("hotpink3","cyan3","goldenrod2", "orange1", "grey70", "grey80"))+
+  labs(title=paste(A), x="Subtype",y="FPKM-UQ")+                         
+  theme_classic()+                                                     # thème blanc
+  theme(plot.title = element_text(size = 12, face = "bold",hjust=0.5),    #titre en gras, centré
+              text=element_text(),
+              axis.title = element_text(face="bold", size=10),        #titre des axes en gras
+              axis.text.x=element_text(angle=45, hjust=1,colour="black", size = 8),
+              axis.text.y=element_text(colour="black", size = 8),
+              legend.position = "none")
+g3
+
+```
+##ACTL8
+```{r}
+A = "ACTL8"
+data = data.frame(Exp = Exp_elected_CT[which(rownames(Exp_elected_CT) == A),],
+                  Subtype = Subtype)
+#Nommer les NT
+data$Subtype = as.character(data$Subtype)
+data$Subtype[which(colData(data_brca)$shortLetterCode == "NT")] = "NT"
+data$Subtype = as.factor(data$Subtype)
+
+g4 = ggplot(data = data, aes(x = Subtype, y = Exp+1, fill = Subtype, color = Subtype))+
+  geom_boxplot(notch = TRUE, size = 1.2, outlier.colour = "white", color = "black")+
+  geom_jitter(width = 0.1)+
+  coord_trans(y="log2")+
+  scale_x_discrete(limits= c("NT", "LumA", "LumB", "Her2", "Basal", "Normal") )+
+  scale_fill_manual(values=c("hotpink4","darkcyan","goldenrod3", "orange3", "grey50", "white"))+
+  scale_color_manual(values=c("hotpink3","cyan3","goldenrod2", "orange1", "grey70", "grey80"))+
+  labs(title=paste(A), x="Subtype",y="FPKM-UQ")+                         
+  theme_classic()+                                                     # thème blanc
+  theme(plot.title = element_text(size = 12, face = "bold",hjust=0.5),    #titre en gras, centré
+              text=element_text(),
+              axis.title = element_text(face="bold", size=10),        #titre des axes en gras
+              axis.text.x=element_text(angle=45, hjust=1,colour="black", size = 8),
+              axis.text.y=element_text(colour="black", size = 8),
+              legend.position = "none")
+g4
+
+```
+
+##DMRTC2
+```{r}
+A = "DMRTC2"
+data = data.frame(Exp = Exp_elected_CT[which(rownames(Exp_elected_CT) == A),],
+                  Subtype = Subtype)
+#Nommer les NT
+data$Subtype = as.character(data$Subtype)
+data$Subtype[which(colData(data_brca)$shortLetterCode == "NT")] = "NT"
+data$Subtype = as.factor(data$Subtype)
+
+g5 = ggplot(data = data, aes(x = Subtype, y = Exp+1, fill = Subtype, color = Subtype))+
+  geom_boxplot(notch = TRUE, size = 1.2, outlier.colour = "white", color = "black")+
+  geom_jitter( width = 0.1)+
+  coord_trans(y="log2")+
+  scale_x_discrete(limits= c("NT", "LumA", "LumB", "Her2", "Basal", "Normal") )+
+  scale_fill_manual(values=c("hotpink4","darkcyan","goldenrod3", "orange3", "grey50", "white"))+
+  scale_color_manual(values=c("hotpink3","cyan3","goldenrod2", "orange1", "grey70", "grey80"))+
+  labs(title=paste(A), x="Subtype",y="FPKM-UQ")+                         
+  theme_classic()+                                                     # thème blanc
+  theme(plot.title = element_text(size = 12, face = "bold",hjust=0.5),    #titre en gras, centré
+              text=element_text(),
+              axis.title = element_text(face="bold", size=10),        #titre des axes en gras
+              axis.text.x=element_text(angle=45, hjust=1,colour="black", size = 8),
+              axis.text.y=element_text(colour="black", size = 8),
+              legend.position = "none")
+g5
+
+```
+##TEX14
+```{r}
+A = "TEX14"
+data = data.frame(Exp = Exp_elected_CT[which(rownames(Exp_elected_CT) == A),],
+                  Subtype = Subtype)
+#Nommer les NT
+data$Subtype = as.character(data$Subtype)
+data$Subtype[which(colData(data_brca)$shortLetterCode == "NT")] = "NT"
+data$Subtype = as.factor(data$Subtype)
+
+g6 = ggplot(data = data, aes(x = Subtype, y = Exp+1, fill = Subtype, color = Subtype))+
+  geom_boxplot(notch = TRUE, size = 1.2, outlier.colour = "white", color = "black")+
+  geom_jitter( width = 0.1)+
+  coord_trans(y="log2")+
+  scale_x_discrete(limits= c("NT", "LumA", "LumB", "Her2", "Basal", "Normal") )+
+  scale_fill_manual(values=c("hotpink4","darkcyan","goldenrod3", "orange3", "grey50", "white"))+
+  scale_color_manual(values=c("hotpink3","cyan3","goldenrod2", "orange1", "grey70", "grey80"))+
+  labs(title=paste(A), x="Subtype",y="FPKM-UQ")+                         
+  theme_classic()+                                                     # thème blanc
+  theme(plot.title = element_text(size = 12, face = "bold",hjust=0.5),    #titre en gras, centré
+              text=element_text(),
+              axis.title = element_text(face="bold", size=10),        #titre des axes en gras
+              axis.text.x=element_text(angle=45, hjust=1,colour="black", size = 8),
+              axis.text.y=element_text(colour="black", size = 8),
+              legend.position = "none")
+g6
+```
+
+##MAGEA1
+```{r}
+A = "MAGEA1"
+data = data.frame(Exp = Exp_elected_CT[which(rownames(Exp_elected_CT) == A),],
+                  Subtype = Subtype)
+#Nommer les NT
+data$Subtype = as.character(data$Subtype)
+data$Subtype[which(colData(data_brca)$shortLetterCode == "NT")] = "NT"
+data$Subtype = as.factor(data$Subtype)
+
+g11 = ggplot(data = data, aes(x = Subtype, y = Exp+1, fill = Subtype, color = Subtype))+
+  geom_boxplot(notch = TRUE, size = 1.2, outlier.colour = "white", color = "black")+
+  geom_jitter( width = 0.1)+
+  coord_trans(y="log2")+
+  scale_x_discrete(limits= c("NT", "LumA", "LumB", "Her2", "Basal", "Normal") )+
+  scale_fill_manual(values=c("hotpink4","darkcyan","goldenrod3", "orange3", "grey50", "white"))+
+  scale_color_manual(values=c("hotpink3","cyan3","goldenrod2", "orange1", "grey70", "grey80"))+
+  labs(title=paste(A), x="Subtype",y="FPKM-UQ")+                         
+  theme_classic()+                                                     # thème blanc
+  theme(plot.title = element_text(size = 12, face = "bold",hjust=0.5),    #titre en gras, centré
+              text=element_text(),
+              axis.title = element_text(face="bold", size=10),        #titre des axes en gras
+              axis.text.x=element_text(angle=45, hjust=1,colour="black", size = 8),
+              axis.text.y=element_text(colour="black", size = 8),
+              legend.position = "none")
+g11
+```
+
+##LIN28A
+```{r}
+A = "LIN28A"
+data = data.frame(Exp = Exp_elected_CT[which(rownames(Exp_elected_CT) == A),],
+                  Subtype = Subtype)
+#Nommer les NT
+data$Subtype = as.character(data$Subtype)
+data$Subtype[which(colData(data_brca)$shortLetterCode == "NT")] = "NT"
+data$Subtype = as.factor(data$Subtype)
+
+g7 = ggplot(data = data, aes(x = Subtype, y = Exp+1, fill = Subtype, color = Subtype))+
+  geom_boxplot(notch = TRUE, size = 1.2, outlier.colour = "white", color = "black")+
+  geom_jitter(width = 0.1)+
+  coord_trans(y="log2")+
+  scale_x_discrete(limits= c("NT", "LumA", "LumB", "Her2", "Basal", "Normal") )+
+  scale_fill_manual(values=c("hotpink4","darkcyan","goldenrod3", "orange3", "grey50", "white"))+
+  scale_color_manual(values=c("hotpink3","cyan3","goldenrod2", "orange1", "grey70", "grey80"))+
+  labs(title=paste(A), x="Subtype",y="FPKM-UQ")+                         
+  theme_classic()+                                                     # thème blanc
+  theme(plot.title = element_text(size = 12, face = "bold",hjust=0.5),    #titre en gras, centré
+              text=element_text(),
+              axis.title = element_text(face="bold", size=10),        #titre des axes en gras
+              axis.text.x=element_text(angle=45, hjust=1,colour="black", size = 8),
+              axis.text.y=element_text(colour="black", size = 8),
+              legend.position = "none")
+g7
+
+```
+
+##SLC1A6
+```{r}
+A = "SLC1A6"
+data = data.frame(Exp = Exp_elected_CT[which(rownames(Exp_elected_CT) == A),],
+                  Subtype = Subtype)
+#Nommer les NT
+data$Subtype = as.character(data$Subtype)
+data$Subtype[which(colData(data_brca)$shortLetterCode == "NT")] = "NT"
+data$Subtype = as.factor(data$Subtype)
+
+g8 = ggplot(data = data, aes(x = Subtype, y = Exp+1, fill = Subtype, color = Subtype))+
+  geom_boxplot(notch = TRUE, size = 1.2, outlier.colour = "white", color = "black")+
+  geom_jitter( width = 0.1)+
+  coord_trans(y="log2")+
+  scale_x_discrete(limits= c("NT", "LumA", "LumB", "Her2", "Basal", "Normal") )+
+  scale_fill_manual(values=c("hotpink4","darkcyan","goldenrod3", "orange3", "grey50", "white"))+
+  scale_color_manual(values=c("hotpink3","cyan3","goldenrod2", "orange1", "grey70", "grey80"))+
+  labs(title=paste(A), x="Subtype",y="FPKM-UQ")+                         
+  theme_classic()+                                                     # thème blanc
+  theme(plot.title = element_text(size = 12, face = "bold",hjust=0.5),    #titre en gras, centré
+              text=element_text(),
+              axis.title = element_text(face="bold", size=10),        #titre des axes en gras
+              axis.text.x=element_text(angle=45, hjust=1,colour="black", size = 8),
+              axis.text.y=element_text(colour="black", size = 8),
+              legend.position = "none")
+g8
+```
+
+##TRIM43
+```{r}
+A = "TRIM43"
+data = data.frame(Exp = Exp_elected_CT[which(rownames(Exp_elected_CT) == A),],
+                  Subtype = Subtype)
+#Nommer les NT
+data$Subtype = as.character(data$Subtype)
+data$Subtype[which(colData(data_brca)$shortLetterCode == "NT")] = "NT"
+data$Subtype = as.factor(data$Subtype)
+
+g9 = ggplot(data = data, aes(x = Subtype, y = Exp+1, fill = Subtype, color = Subtype))+
+  geom_boxplot(notch = TRUE, size = 1.2, outlier.colour = "white", color = "black")+
+  geom_jitter( width = 0.1)+
+  coord_trans(y="log2")+
+  scale_x_discrete(limits= c("NT", "LumA", "LumB", "Her2", "Basal", "Normal") )+
+  scale_fill_manual(values=c("hotpink4","darkcyan","goldenrod3", "orange3", "grey50", "white"))+
+  scale_color_manual(values=c("hotpink3","cyan3","goldenrod2", "orange1", "grey70", "grey80"))+
+  labs(title=paste(A), x="Subtype",y="FPKM-UQ")+                         
+  theme_classic()+                                                     # thème blanc
+  theme(plot.title = element_text(size = 12, face = "bold",hjust=0.5),    #titre en gras, centré
+              text=element_text(),
+              axis.title = element_text(face="bold", size=10),        #titre des axes en gras
+              axis.text.x=element_text(angle=45, hjust=1,colour="black", size = 8),
+              axis.text.y=element_text(colour="black", size = 8),
+              legend.position = "none")
+g9
+```
+
+##XAGE2
+```{r}
+A = "XAGE2"
+data = data.frame(Exp = Exp_elected_CT[which(rownames(Exp_elected_CT) == A),],
+                  Subtype = Subtype)
+#Nommer les NT
+data$Subtype = as.character(data$Subtype)
+data$Subtype[which(colData(data_brca)$shortLetterCode == "NT")] = "NT"
+data$Subtype = as.factor(data$Subtype)
+
+g10 = ggplot(data = data, aes(x = Subtype, y = Exp+1, fill = Subtype, color = Subtype))+
+  geom_boxplot(notch = TRUE, size = 1.2, outlier.colour = "white", color = "black")+
+  geom_jitter( width = 0.1)+
+  coord_trans(y="log2")+
+  scale_x_discrete(limits= c("NT", "LumA", "LumB", "Her2", "Basal", "Normal") )+
+  scale_fill_manual(values=c("hotpink4","darkcyan","goldenrod3", "orange3", "grey50", "white"))+
+  scale_color_manual(values=c("hotpink3","cyan3","goldenrod2", "orange1", "grey70", "grey80"))+
+  labs(title=paste(A), x="Subtype",y="FPKM-UQ")+                         
+  theme_classic()+                                                     # thème blanc
+  theme(plot.title = element_text(size = 12, face = "bold",hjust=0.5),    #titre en gras, centré
+              text=element_text(),
+              axis.title = element_text(face="bold", size=10),        #titre des axes en gras
+              axis.text.x=element_text(angle=45, hjust=1,colour="black", size = 8),
+              axis.text.y=element_text(colour="black", size = 8),
+              legend.position = "none")
+g10
+```
+
+
+##Total
+```{r}
+grid.arrange(g1, g2, g9, g10, g7, g8, g11, g5, g6, g3, g4, 
+             ncol = 5, nrow = 3)
+```
+
+#HORMAD1 vs CXorf61
+```{r}
+
+data = data.frame(Hormad = Exp_elected_CT[which(rownames(Exp_elected_CT) == "HORMAD1"),],
+                  Cxorf = Exp_elected_CT[which(rownames(Exp_elected_CT) == "CXorf61"),],
+                  Subtype = Subtype)
+#Nommer les NT
+  data$Subtype = as.character(data$Subtype)
+  data$Subtype[which(colData(data_brca)$shortLetterCode == "NT")] = "NT"
+  data$Subtype = as.factor(data$Subtype)
+
+  head(data)
+```
+```{r}
+equation = function(x) {
+  lm_coef <- list(r = round(x$r[1,2], digits = 2),
+                  P = x$P[1,2]);
+  lm_eq <- substitute(bold(Pearson)*":"~~italic(R) == r*","~~italic(pvalue)~"="~P,lm_coef)
+  as.character(as.expression(lm_eq));                 
+}
+
+#Coeff de corrélation
+xm = as.matrix(data[,1:2])
+#head(xm[,])
+library("Hmisc")
+M <-  rcorr(xm, type = "pearson")
+M
+```
+
+
+
+
+```{r}
+ggplot(data = data, aes(x = Hormad + 1, y = Cxorf + 1, fill = Subtype, color = Subtype))+
+  geom_point()+
+  coord_trans(y="log2", x = "log2")+
+  geom_smooth(colour = "black",fill="white", method = "lm") +
+  
+  scale_color_manual(values=c("hotpink4","darkcyan","goldenrod3", "orange3", "grey50", "grey70"))+
+#  scale_color_manual(values=c("hotpink3","cyan3","goldenrod2", "orange1", "grey70", "grey80"))+
+  labs(title="Corr H/C", x="HORMAD1",y="CXorf61")+                         
+  theme_classic()+                                                     # thème blanc
+  theme(plot.title = element_text(size = 12, face = "bold",hjust=0.5),    #titre en gras, centré
+              text=element_text(),
+              axis.title = element_text(face="bold", size=10),        #titre des axes en gras
+              axis.text.x=element_text(angle=45, hjust=1,colour="black", size = 8),
+              axis.text.y=element_text(colour="black", size = 8),
+              legend.position = "right")+
+        annotate("text", x = 25, y = 5, label = equation(M), parse = TRUE)
+
+
+```
+
+##Basal only
+```{r}
+data = subset(data, Subtype %in% c("Basal", "NT"))
+
+
+xm = as.matrix(data[,1:2])
+#head(xm[,])
+library("Hmisc")
+M <-  rcorr(xm, type = "pearson")
+
+
+ggplot(data = data, aes(x = Hormad + 1, y = Cxorf + 1, fill = Subtype, color = Subtype))+
+  geom_point()+
+  coord_trans(y="log2", x = "log2")+
+  geom_smooth(colour = "black",fill="white", method = "lm") +
+  
+  scale_color_manual(values=c("hotpink4","grey70"))+
+  labs(title="Corr H/C", x="HORMAD1",y="CXorf61")+                         
+  theme_classic()+                                                     # thème blanc
+  theme(plot.title = element_text(size = 12, face = "bold",hjust=0.5),    #titre en gras, centré
+              text=element_text(),
+              axis.title = element_text(face="bold", size=10),        #titre des axes en gras
+              axis.text.x=element_text(angle=45, hjust=1,colour="black", size = 8),
+              axis.text.y=element_text(colour="black", size = 8),
+              legend.position = "right")+
+        annotate("text", x = 25, y = 5, label = equation(M), parse = TRUE)
+
+
+```
+
+
+##Save
+
+```{r}
+KEEP=c('EE_elected_CT','Selected_CT', 'CTselected_GenomicInfos', 'EE_CT_BRCA', 'data_brca', 'Subtype' )
+rm(list= ls()[!(ls() %in% KEEP )])
+#Puis Restart R manuellement
+
+save.image("C:/Users/marth/Desktop/These_Marthe/1_Bioinfo/181115_TCGApostSeminaire/181218_WS_CoExpression_Circos_SelectedCT.RData")
+```
+
+
