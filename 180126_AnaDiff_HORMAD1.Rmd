@@ -1,0 +1,538 @@
+---
+title: "R Notebook"
+output: html_notebook
+---
+
+#Introduction
+
+##Path
+```{r}
+pathRes = "C:/Users/marth/Desktop/These_Marthe/1_Bioinfo/181115_TCGApostSeminaire"
+```
+
+
+##Librairies
+```{r}
+library(DESeq2)
+library(TCGAbiolinks)
+
+library(ggplot2)
+library(ggrepel)
+library(plotly)
+
+library(stringr)
+
+```
+
+##Fonctions
+```{r}
+
+```
+
+##Data
+
+```{r}
+KEEP=c('EE_elected_CT','Selected_CT', 'EE_CT_BRCA', 'data_brca', 'Subtype' )
+#rm(list= ls()[!(ls() %in% KEEP )])
+#Puis Restart R manuellement
+
+save.image("C:/Users/marth/Desktop/These_Marthe/1_Bioinfo/181115_TCGApostSeminaire/181226_AnaDiff_Basal.RData")
+```
+
+
+
+#Ana Diff Hormad1
+```{r}
+load("C:/Users/marth/Desktop/These_Marthe/1_Bioinfo/181115_TCGApostSeminaire/181226_AnaDiff_Basal.RData")
+```
+
+##Construction data
+On selectionne les basal et selon le ON OFF statut
+```{r}
+Tumors_selected = colnames(assay(data_brca, 1))[which(Subtype == "Basal")]
+head(Tumors_selected)
+
+State =  EE_elected_CT[which(rownames(EE_elected_CT)=="HORMAD1"),which(Subtype == "Basal")]
+
+length(which(State==1))
+length(which(State==0))
+
+```
+
+On peut aussi prendre les 10% UP et DOWN
+```{r}
+quant_hormad = quantile(degsig[which(degsig$symbol=="HORMAD1"), 14:200], 
+         probs = seq(0, 1, 0.1))
+quant_hormad
+```
+```{r}
+data = data.frame( t(degsig[which(degsig$symbol=="HORMAD1"),14:200]))
+mini = quant_hormad[2]
+maxi = quant_hormad[5]
+
+data = data %>% mutate(State_quantile = ifelse(data$X8381 < c(mini[1,1]) , "Low_Hormad",
+                                  ifelse(data$X8381 > c(maxi[1,1]), "High_Hormad", 
+                                         "NS"
+                                         )
+                                  )
+)
+data$State_quantile
+```
+
+
+```{r}
+isServeOK()
+
+query <- GDCquery(project = "TCGA-BRCA",
+                  data.category = "Transcriptome Profiling",
+                  data.type = "Gene Expression Quantification",
+                  workflow.type = "HTSeq - Counts",
+                  barcode = Tumors_selected)
+
+
+                  
+GDCdownload(query, method = "api", files.per.chunk = 50) #download par petits paquets
+data_sub <- GDCprepare(query) #Prépare l'env de travail : SummarizedExperiment à partir des data
+
+```
+```{r}
+length(which(Tumors_selected %in% colnames(assay(data_sub))))
+
+Pas_trouve = which(is.element(Tumors_selected, colnames(assay(data_sub)))==FALSE)
+length(Pas_trouve)
+
+Selectect_suantile = which(data$State_quantile[-Pas_trouve] != "NS")
+
+```
+
+On vérifie que EE_selected_CT et data_sub sont rangées dans le bon ordre
+```{r}
+head(data.frame(colnames(assay(data_sub[,])),
+                Tumors_selected[-Pas_trouve]))
+tail(data.frame(colnames(assay(data_sub[,])),
+                Tumors_selected[-Pas_trouve]))
+```
+
+
+
+```{r}
+
+dds_selected = data_sub[ , c( grep("1",State[-Pas_trouve] ), 
+                      grep("0",State[-Pas_trouve] )) ]
+dds_selected = dds_selected[,Selectect_suantile]
+
+data_col = DataFrame(samples = colnames(dds_selected),
+                     State = as.factor(data$State_quantile[-Pas_trouve][Selectect_suantile]))
+data_col
+```
+
+
+On construit le nouveau SE
+```{r}
+colData(dds_selected) = data_col
+colnames(dds_selected) = data_col$samples
+
+```
+
+
+##Analyse DESEq2
+```{r}
+#Construction de l'objet DESeq2
+dds = DESeqDataSet(dds_selected, design = ~ State)
+
+counts(dds[,1:5]) %>% head
+```
+
+
+###Pré-analyse
+
+
+
+Extraire les gènes non exprimés
+```{r}
+#combien de gènes
+nrow(dds)
+sum(rowSums(counts(dds)) <= 10)
+
+dds <- dds[ rowSums(counts(dds)) > 1, ]
+nrow(dds)
+```
+
+Analyse en Composantes Principales
+```{r}
+vsd <- vst(dds, blind = FALSE)
+head(assay(vsd[,1:5]), 3)
+plotPCA(vsd, intgroup = c("State"))
+
+```
+
+
+
+```{r}
+
+#Calcul Res
+dds = DESeq(dds)
+
+res = results(dds, contrast = c("State", "High_Hormad", "Low_Hormad"))
+summary(res)
+
+plotMA(res, ylim = c(-5,5))
+
+
+```
+
+```{r}
+sum(res$padj < 0.001, na.rm = TRUE)
+```
+
+
+###Annotations
+```{r}
+#BiocManager::install("org.Hs.eg.db", version = "3.8")
+
+library("AnnotationDbi")
+library("org.Hs.eg.db")
+
+res$symbol <- mapIds(org.Hs.eg.db,
+                     keys=row.names(res),
+                     column="SYMBOL",
+                     keytype="ENSEMBL",
+                     multiVals="first")
+
+res$entrez <- mapIds(org.Hs.eg.db,
+                     keys=row.names(res),
+                     column="ENTREZID",
+                     keytype="ENSEMBL",
+                     multiVals="first")
+```
+
+```{r}
+rowData(dds_selected)
+Anno = read.table("C:/Users/marth/Desktop/These_Marthe/1_Bioinfo/documents/genecode.v28_marthe_modif.txt",
+                  sep = "\t", h = T)
+head(Anno)
+```
+
+```{r}
+Anno = data.frame(Anno, ENS_Short = str_sub(Anno$ENS, 1, 15))
+
+res_anno = data.frame(res)
+res_anno = merge(res_anno, Anno, by.x = "row.names", by.y = "ENS_Short")
+
+head(res_anno)
+```
+###Ecrire les tables
+```{r}
+#on renomme les titres de facon lisible
+ech = paste0(colData(dds)$samples,"_",colData(dds)$State)
+
+ncount = counts(dds, normalized=TRUE)
+
+colnames(ncount) = ech
+
+#on réordonne avec les ON d'abor
+grep("1",colData(dds)$State )
+
+ncount = ncount[ , c( grep("1",colData(dds)$State ), 
+                      grep("0",colData(dds)$State )) ]
+
+
+deg = merge(res_anno, ncount,
+            by.x = "Row.names", by.y="row.names")
+list(res, deg, ncount) %>% lapply(nrow)
+
+#on prend seulement les sig ! avec subset pour gérer le pb des NA
+degsig = subset(deg, padj<=0.05 &  abs(log2FoldChange) >= 1)
+#et on les ordonne par padj
+degsigord = degsig[order(degsig$padj),]
+
+nrow(degsig)
+
+head(degsigord[,])
+
+write.table(degsigord, paste(pathRes, "HORMAD1_res_anno_sign_Quantile.txt", sep = "/"), quote = F, row.names = F, col.names = F, sep = "\t")
+write.table(deg, paste(pathRes, "HORMAD1_res_anno_quantile.txt", sep = "/"), quote = F, row.names = F, col.names = F, sep = "\t")
+```
+
+
+
+###MAplot Maison
+```{r}
+int_TSPS = c("HORMAD1")
+int_diff_neg = res_anno[which(res_anno$padj < 0.001 & res_anno$log2FoldChange < 0),c( 8)]
+int_diff_pos = res_anno[which(res_anno$padj < 0.001 & res_anno$log2FoldChange > 0),c( 8)]
+
+
+id_TSPS = which(is.element(str_sub(res_anno$Symbol, 2), rownames(Selected_CT))==TRUE)
+id_HORMAD = which(is.element(str_sub(res_anno$Symbol, 2),c("HORMAD1"))==TRUE)
+id_sign = which(res_anno$padj <0.01)
+
+id_label_TSPS = which(is.element(str_sub(res_anno$Symbol, 2), int_TSPS)==TRUE)
+id_label_diff_pos = which(is.element(str_sub(res_anno$Symbol, 2), int_diff_pos)==TRUE)
+id_label_diff_neg = which(is.element(str_sub(res_anno$Symbol, 2), int_diff_neg)==TRUE)
+
+ggplot(res_anno,
+       aes(x = log2(1+baseMean), y = log2FoldChange ))+
+  geom_point(data = res_anno[,], color = "grey") +
+  geom_point(data = res_anno[id_sign,], color = "red4")+
+  geom_point(data = res_anno[id_TSPS,], color = "goldenrod3")+
+  geom_point(data = res_anno[id_HORMAD,], color = "goldenrod3")+
+  
+  geom_text_repel(data = res_anno[id_label_TSPS,], color="goldenrod3", aes(label=Symbol), 
+                  nudge_y = 0.5,direction    = "both",vjust= 0, segment.size = 0.2)+
+ 
+    geom_text_repel(data = res_anno[id_label_diff_pos,], color="red4", aes(label=Symbol),
+                 nudge_y  = 3.5,direction    = "both",vjust= 0, segment.size = 0.2)+
+   geom_text_repel(data = res_anno[id_label_diff_neg,], color="red4", aes(label=Symbol),
+                 nudge_y  = -1,direction    = "both",vjust= 0, segment.size = 0.2)+
+  
+  geom_hline(yintercept = 0, linetype = "dashed", color = "black")+
+  labs(title="MAplot HORMAD1", x="Base Mean",y="Log2 Fold-Change")+                         
+  theme_classic()+                                                     # thème blanc
+  theme(plot.title = element_text(size = 12, face = "bold",hjust=0.5),    #titre en gras, centré
+              text=element_text(),
+              axis.title = element_text(face="bold", size=10),        #titre des axes en gras
+              axis.text.x=element_text(angle=45, hjust=1,colour="black", size = 8),
+              axis.text.y=element_text(colour="black", size = 8),
+              legend.position = "none")
+  
+
+```
+
+####Interactive MAplot
+```{r}
+ p = ggplot(res_anno,
+       aes(x = log2(1+baseMean), y = log2FoldChange, label = Symbol ))+
+  geom_point(data = res_anno[id_sign,], color = "red4")+
+  geom_point(data = res_anno[id_TSPS,], color = "goldenrod3")+
+  geom_point(data = res_anno[id_HORMAD,], color = "goldenrod3")+
+
+  
+  geom_hline(yintercept = 0, linetype = "dashed", color = "black")+
+  labs(title="MAplot HORMAD1", x="Base Mean",y="Log2 Fold-Change")+                         
+  theme_classic()+                                                     # thème blanc
+  theme(plot.title = element_text(size = 12, face = "bold",hjust=0.5),    #titre en gras, centré
+              text=element_text(),
+              axis.title = element_text(face="bold", size=10),        #titre des axes en gras
+              axis.text.x=element_text(angle=45, hjust=1,colour="black", size = 8),
+              axis.text.y=element_text(colour="black", size = 8),
+              legend.position = "none")
+ggplotly(p)
+```
+
+####interactive Volcano
+```{r}
+ p = ggplot(res_anno,
+       aes(x = log2FoldChange, y = -log10(padj), label = Symbol ))+
+  geom_point(data = res_anno[id_sign,], color = "red4")+
+  geom_point(data = res_anno[id_TSPS,], color = "goldenrod3")+
+  geom_point(data = res_anno[id_HORMAD,], color = "goldenrod3")+
+  
+  geom_hline(yintercept = -log10(0.05), alpha = 0.5, linetype = "dashed", color = "black") + 
+  geom_vline(xintercept = c(-1,1), alpha = 0.5, linetype = "dashed", color = "black")+
+  
+  labs(title="MAplot HORMAD1", y = "-log10 (p-value adjusted)",x = "Log2 Fold-Change")+                         
+  theme_classic()+                                                     # thème blanc
+  theme(plot.title = element_text(size = 12, face = "bold",hjust=0.5),    #titre en gras, centré
+              text=element_text(),
+              axis.title = element_text(face="bold", size=10),        #titre des axes en gras
+              axis.text.x=element_text(angle=45, hjust=1,colour="black", size = 8),
+              axis.text.y=element_text(colour="black", size = 8),
+              legend.position = "none")
+ggplotly(p)
+```
+
+
+```{r}
+res_anno[which(res_anno$padj < 0.001),c(3, 7, 8)]
+```
+```{r}
+sort(res_anno[which(res_anno$padj < 0.001),c( 8)]
+)
+```
+
+##GSEA
+```{r}
+id_int = which(res_anno$padj < 0.01)
+tab = data.frame(res_anno$Symbol[id_int],
+                 res_anno$log2FoldChange[id_int])
+colnames(tab) = c("Symbol", "Fold-Change")
+
+write.table(tab, paste(pathRes, "GSEA/Hormad_0_01_All.rnk", sep = "/"), quote = F, row.names = F, col.names = F, sep = "\t")
+
+```
+
+```{r}
+id_int = which(res_anno$padj < 0.01 & res_anno$Anno == " protein_coding")
+tab = data.frame(res_anno$Symbol[id_int],
+                 res_anno$log2FoldChange[id_int])
+colnames(tab) = c("Symbol", "Fold-Change")
+
+write.table(tab, paste(pathRes, "GSEA/Hormad_0_01_protcod.rnk", sep = "/"), quote = F, row.names = F, col.names = F, sep = "\t")
+```
+
+```{r}
+save.image("C:/Users/marth/Desktop/These_Marthe/1_Bioinfo/181115_TCGApostSeminaire/181226_AnaDiff_Basal.RData")
+```
+
+
+#AnaDif CXorf61
+
+##Construction
+```{r}
+Tumors_selected2 = colnames(assay(data_brca, 1))[which(Subtype == "Basal")]
+
+State2 =  EE_elected_CT[which(rownames(EE_elected_CT)=="CXorf61"),which(Subtype == "Basal")]
+
+length(which(State2==1))
+length(which(State2==0))
+
+isServeOK()
+
+query <- GDCquery(project = "TCGA-BRCA",
+                  data.category = "Transcriptome Profiling",
+                  data.type = "Gene Expression Quantification",
+                  workflow.type = "HTSeq - Counts",
+                  barcode = Tumors_selected)
+
+
+                  
+GDCdownload(query, method = "api", files.per.chunk = 50) #download par petits paquets
+data_sub2 <- GDCprepare(query) #Prépare l'env de travail : SummarizedExperiment à partir des data
+
+
+```
+
+```{r}
+length(which(Tumors_selected2 %in% colnames(assay(data_sub2))))
+Pas_trouve = which(is.element(Tumors_selected2, colnames(assay(data_sub2)))==FALSE)
+length(Pas_trouve)
+
+dds_selected2 = data_sub2
+
+data_col2 = DataFrame(samples = colnames(dds_selected2),
+                     State2 = as.factor(State2[-Pas_trouve]))
+data_col2
+
+#nouveau SE
+colData(dds_selected2) = data_col2
+colnames(dds_selected2) = data_col2$Samples
+```
+
+##Ana DESEq2
+```{r}
+#Construction de l'objet DESeq2
+dds2 = DESeqDataSet(dds_selected2, design = ~ State2)
+
+#Calcul Res
+dds2 = DESeq(dds2)
+
+res2 = results(dds2, contrast = c("State2", "1", "0"))
+summary(res2)
+
+plotMA(res2, ylim = c(-2,2))
+```
+
+```{r}
+
+res_anno2 = data.frame(ENS = rownames(res2), res2)
+res_anno2 = merge.data.frame(res_anno2, Anno, by.x = "ENS", by.y = "ENS_Short")
+
+head(res_anno2)
+
+write.table(res_anno2, paste(pathRes, "CXorf61_res_anno.txt", sep = "/"), quote = F, row.names = F, col.names = F, sep = "\t")
+
+res_anno2[which(res_anno2$padj < 0.001),c(3, 7, 10)]
+
+```
+
+```{r}
+res_anno2_signif = res_anno2[which(res_anno2$padj < 0.01),]
+res_anno_signif = res_anno[which(res_anno$padj < 0.01),]
+
+
+sort(res_anno2[which(res_anno2$padj < 0.01),c( 10)])
+
+```
+
+##MAplot
+```{r}
+colnames(res_anno2)[1]="ENS.1"
+
+int_TSPS = c("HORMAD1", "FTHL17", "CT83")
+int_diff_pos = c("SOX1", "NANOG", "POU3F1", "HOXB5", "TP73", "HOXB1")
+int_diff_neg = c("WIF1", "FOXA3", "SFRP5", "ESX1", "MORC1", "MEI4", "VCX3A", "SMR3B")
+
+
+id_TSPS = which(is.element(str_sub(res_anno2$Symbol, 2), rownames(Selected_CT))==TRUE)
+id_HORMAD = which(is.element(str_sub(res_anno2$Symbol, 2),c("CT83"))==TRUE)
+id_sign = which(res_anno2$padj <0.01)
+
+id_label_TSPS = which(is.element(str_sub(res_anno2$Symbol, 2), int_TSPS)==TRUE)
+id_label_diff_pos = which(is.element(str_sub(res_anno2$Symbol, 2), int_diff_pos)==TRUE)
+id_label_diff_neg = which(is.element(str_sub(res_anno2$Symbol, 2), int_diff_neg)==TRUE)
+
+ ggplot(res_anno2,
+       aes(x = log2(1+baseMean), y = log2FoldChange ))+
+  geom_point(data = res_anno2[,], color = "grey") +
+  geom_point(data = res_anno2[id_sign,], color = "red4")+
+  geom_point(data = res_anno2[id_TSPS,], color = "goldenrod3")+
+  geom_point(data = res_anno2[id_HORMAD,], color = "goldenrod3")+
+  
+  geom_text_repel(data = res_anno2[id_label_TSPS,], color="goldenrod3", aes(label=Symbol), 
+                  nudge_y = 0.5,direction    = "y",vjust= 0, segment.size = 0.2)+
+  geom_text_repel(data = res_anno2[id_label_diff_pos,], color="red4", aes(label=Symbol),
+                 nudge_y  = -3.5,direction    = "y",vjust= 0, segment.size = 0.2)+
+    geom_text_repel(data = res_anno2[id_label_diff_neg,], color="red4", aes(label=Symbol),
+                 nudge_y  = 3.5,direction    = "y",vjust= 0, segment.size = 0.2)+
+  
+  geom_hline(yintercept = 0, linetype = "dashed", color = "black")+
+  labs(title="MAplot CXorf61 / CT83", x="Base Mean",y="Log2 Fold-Change")+                         
+  theme_classic()+                                                     # thème blanc
+  theme(plot.title = element_text(size = 12, face = "bold",hjust=0.5),    #titre en gras, centré
+              text=element_text(),
+              axis.title = element_text(face="bold", size=10),        #titre des axes en gras
+              axis.text.x=element_text(angle=45, hjust=1,colour="black", size = 8),
+              axis.text.y=element_text(colour="black", size = 8),
+              legend.position = "none")
+  
+
+```
+
+###Interactive MAplot
+```{r}
+ p = ggplot(res_anno2,
+       aes(x = log2(1+baseMean), y = log2FoldChange, label = Symbol ))+
+  geom_point(data = res_anno2[id_sign,], color = "red4")+
+  geom_point(data = res_anno2[id_TSPS,], color = "goldenrod3")+
+  geom_point(data = res_anno2[id_HORMAD,], color = "goldenrod3")+
+
+  
+  geom_hline(yintercept = 0, linetype = "dashed", color = "black")+
+  labs(title="MAplot CXorf61 / CT83", x="Base Mean",y="Log2 Fold-Change")+                         
+  theme_classic()+                                                     # thème blanc
+  theme(plot.title = element_text(size = 12, face = "bold",hjust=0.5),    #titre en gras, centré
+              text=element_text(),
+              axis.title = element_text(face="bold", size=10),        #titre des axes en gras
+              axis.text.x=element_text(angle=45, hjust=1,colour="black", size = 8),
+              axis.text.y=element_text(colour="black", size = 8),
+              legend.position = "none")
+
+ggplotly(p)
+```
+
+
+##Selected Samples
+```{r}
+Tumors_ID = colData(data_brca)$subtype_patient[which(Subtype == "Basal")]
+
+write.table(Tumors_ID, paste(pathRes, "Tumors_ID.txt", sep = "/"), quote = F, row.names = F, col.names = F, sep = "\t")
+
+```
+
+
+#Intersect
+```{r}
+sort(intersect(res_anno_signif$Symbol, res_anno2_signif$Symbol))
+```
+
