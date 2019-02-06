@@ -1,0 +1,606 @@
+---
+title: "R Notebook"
+output: html_notebook
+---
+
+#Intro
+##Path
+
+```{r}
+pathData = "C:/Users/marth/Desktop/These_Marthe/1_Bioinfo/180814_TCGA_All4"
+pathRes = "C:/Users/marth/Desktop/These_Marthe/1_Bioinfo/190206_TCGA_Lung"
+```
+
+##Data
+
+Initial
+```{r}
+load("C:/Users/marth/Desktop/These_Marthe/1_Bioinfo/181115_TCGApostSeminaire/TCGA_FPKM-UQ_4CancerTypes.RData")
+
+#Les CT
+TSPS=read.table(file="C:/Users/marth/Desktop/These_Marthe/1_Bioinfo/documents/Data_TSPS_fromRousseau.txt", h=T, sep="\t")
+CT_Wang=read.table(file="C:/Users/marth/Desktop/These_Marthe/1_Bioinfo/documents/CT_list_Wang.txt", h=T, sep="\t", dec=",")
+CT_Database=read.table(file="C:/Users/marth/Desktop/These_Marthe/1_Bioinfo/documents/data_CTA_list_from_CT_database.txt", h=T, sep="\t", dec=",")
+#réunion des trois listes
+CT=data.frame(Description=c(as.character(TSPS$Gene_Symbol),
+                            as.character(CT_Wang$Description),
+                            as.character(CT_Database$Family_member)))
+
+CT_uniq=CT$Description[-which(duplicated(CT$Description)==TRUE)]
+CT_uniq=data.frame(Description=CT_uniq)
+```
+
+Working
+```{r}
+
+```
+
+##Librairies
+```{r}
+library(SummarizedExperiment)
+
+library(ggplot2)
+library(dplyr)
+library(tidyr)
+library(gridExtra)
+```
+
+
+##Fonctions Maison
+```{r}
+Ma_fonction_MEAN3SD=function(X) {
+  mean(X, na.rm=T)+3*sd(X, na.rm=T)
+}
+Ma_fonction_mean=function(X) {
+  mean(X, na.rm=T)
+}
+Ma_fonction_SD=function(X) {
+  sd(X, na.rm=T)
+}
+
+vecto = function(data) {
+                 vec = NULL ; ech = NULL ; gene = NULL ; expr = NULL
+                 for (i in 1:ncol(data)) {
+                           vec = c(vec, data[,i])
+                           ech = c(ech, rep( colnames(data)[i],
+length(data[,i])) )
+                           gene = rep(row.names(data), ncol(data))
+                 }
+
+                 dt = data.frame(vec, ech, gene)
+                 dt$ech = factor(dt$ech, levels = colnames(data))
+                 dt$gene = factor(dt$gene, levels = rownames(data))
+
+         return( dt )
+}
+```
+
+
+#Exploration
+
+Densité
+```{r}
+A="HORMAD1"
+
+id_A=grep(A, rownames(assay(data_lusc,2)*10^6))
+rownames(assay(data_lusc,2)*10^6)[id_A] #c'est donc le premier
+ 
+#on construit le tableau contenant la valeur d'expression du gene A & les labels, ici pour le sein
+data=data.frame(exp=assay(data_lusc,2)[id_A[1],]*10^6,
+                label=colData(data_lusc)$definition)
+
+head(data)
+
+colnames(data)=c("exp", "label")
+
+#Scale
+data$exp_log2=log2(1+data$exp)
+
+#renommer les labels: on groupe ensemble toutes le tumeurs (primaires, récu et méta)
+data$label[which(data$label=="Metastatic")]="Primary solid Tumor"
+data$label[which(data$label=="Recurrent Solid Tumor")]="Primary solid Tumor"
+data$label=relevel(data$label,ref="Solid Tissue Normal")
+
+
+listMean=mean(subset(data, label=="Solid Tissue Normal")$exp_log2)
+listSD = sd(subset(data, label=="Solid Tissue Normal")$exp_log2)
+            
+
+
+P1=ggplot(data=subset(data, label=="Solid Tissue Normal"), 
+         aes(x=exp_log2, fill=label))+
+
+    geom_density(fill="orange", color="orange", alpha=0.5, size=1.5)+
+  
+    geom_vline(xintercept=listMean,
+              size=2, color="orange")+
+    geom_vline(xintercept=listMean+3*listSD,
+              linetype="dashed", size=2, color="orange")+
+  
+  facet_grid(label ~.)+
+  scale_fill_manual(values=c("white", "grey30"))+
+  scale_x_continuous(limits=c(min(data$exp_log2),max(data$exp_log2)))+
+  
+  labs(title=paste(A), y="Density",x=" ",cex=14)+
+  theme_classic()+ 
+ theme(plot.title = element_text(size = 14, face = "bold",hjust = 0.5),
+              text=element_text(),
+              axis.title = element_text(face="bold"),
+              axis.text.x=element_text(angle=45, hjust=1,colour="black", size = 12),
+              axis.text.y=element_text(colour="black", size = 12))+ 
+  guides(fill=FALSE)
+
+P2=ggplot(data=subset(data, label!="Solid Tissue Normal"), 
+         aes(x=exp_log2, fill=label))+
+    geom_density(fill="black", color="black", alpha=0.5, size=1.5)+
+  
+    geom_vline(xintercept=listMean,
+              size=2, color="orange")+
+    geom_vline(xintercept=listMean+3*listSD,
+              linetype="dashed", size=2, color="orange")+
+  
+  facet_grid(label ~.)+
+  scale_fill_manual(values=c("white", "grey30"))+
+  scale_x_continuous(limits=c(min(data$exp_log2),max(data$exp_log2)))+
+  labs(title=NULL, y="Density",x="LOG2 Normalized Counts",cex=14)+
+  theme_classic()+ 
+ theme(plot.title = element_text(NULL),
+              text=element_text(),
+              axis.title = element_text(face="bold"),
+              axis.text.x=element_text(angle=45, hjust=1,colour="black", size = 12),
+              axis.text.y=element_text(colour="black", size = 12))+ 
+  guides(fill=FALSE)
+g= grid.arrange(P1, P2,
+             ncol=1, nrow=2)
+ggsave(paste(pathRes,"/ExpHormad1_LUSC_FPKM.eps", sep=""), device=cairo_ps, g)
+```
+
+#Xalcul des EE
+
+Scale
+```{r}
+Ma_functionlog2=function(X) {
+  X=log2(1+X)
+}
+
+#On translate les données avec la fonction choisie
+data_brca_scale=assay(data_brca, 2)*10^6
+data_brca_scale=Ma_functionlog2(data_brca_scale)
+
+data_coad_scale=assay(data_coad, 2)*10^6
+data_coad_scale=Ma_functionlog2(data_coad_scale)
+
+data_luad_scale=assay(data_luad, 2)*10^6
+data_luad_scale=Ma_functionlog2(data_luad_scale)
+
+data_lusc_scale=assay(data_lusc, 2)*10^6
+data_lusc_scale=Ma_functionlog2(data_lusc_scale)
+```
+
+
+Thr
+```{r}
+library(stringr)
+#On cherche à éviter les duplicats
+
+#Test
+rownames(data_brca)[grep(paste(as.character(CT_uniq$Description[1007]), "", sep=""),
+         rownames(data_brca) )]
+
+rownames(data_brca)[grep(paste(as.character(CT_uniq$Description[1007]), "[^[:alnum:]]", sep=""),
+         rownames(data_brca) )]
+#^means anything but
+#On récupère tout sauf les expressions régulières suivies d'une valeur alpha numérique
+
+
+names_CT_breast=c()
+index_CT_breast=c()
+for (i in c(1:length(CT_uniq$Description))) {
+  a =grep(paste(as.character(CT_uniq$Description[i]), "[^[:alnum:]]", sep=""),
+         rownames(data_brca) )
+  if (length(a)> 1) {         #On affiche les conflits si besoins
+    print(CT_uniq$Description[i])
+    print(rownames(data_brca)[a])
+  }
+  index_CT_breast=c(index_CT_breast, a ) #Id_Row
+  names_CT_breast=c(names_CT_breast, rownames(data_brca)[a]) #HUGO
+}
+#On vérifie grace au print que les conflits sont de "vrais conflits" : duplicats des HUGO
+length(index_CT_breast) #1333
+
+
+names_CT_luad=c()
+index_CT_luad=c()
+for (i in c(1:length(CT_uniq$Description))) {
+  a =grep(paste(as.character(CT_uniq$Description[i]), "[^[:alnum:]]", sep=""),
+         rownames(data_luad) )
+  index_CT_luad=c(index_CT_luad, a ) #Id_Row
+  names_CT_luad=c(names_CT_luad, rownames(data_luad)[a]) #HUGO
+}
+length(index_CT_luad)
+
+
+names_CT_lusc=c()
+index_CT_lusc=c()
+for (i in c(1:length(CT_uniq$Description))) {
+  a =grep(paste(as.character(CT_uniq$Description[i]), "[^[:alnum:]]", sep=""),
+         rownames(data_lusc) )
+  index_CT_lusc=c(index_CT_lusc, a ) #Id_Row
+  names_CT_lusc=c(names_CT_lusc, rownames(data_lusc)[a]) #HUGO
+}
+length(index_CT_lusc)
+
+
+names_CT_coad=c()
+index_CT_coad=c()
+for (i in c(1:length(CT_uniq$Description))) {
+  a =grep(paste(as.character(CT_uniq$Description[i]), "[^[:alnum:]]", sep=""),
+         rownames(data_coad) )
+  index_CT_coad=c(index_CT_coad, a ) #Id_Row
+  names_CT_coad=c(names_CT_coad, rownames(data_coad)[a]) #HUGO
+}
+length(index_CT_coad)
+
+
+
+```
+
+
+```{r}
+#On récupère les tissus normaux
+
+Norm_LUAD=c(which(colData(data_luad)$definition=="Solid Tissue Normal") )
+Norm_LUSC=c(which(colData(data_lusc)$definition=="Solid Tissue Normal"))
+Norm_COAD=c(which(colData(data_coad)$definition=="Solid Tissue Normal"))
+Norm_BRCA=c(which(colData(data_brca)$definition=="Solid Tissue Normal"))
+
+#Et les tumeurs
+Tum_LUAD=c(which(colData(data_luad)$definition!="Solid Tissue Normal"))
+Tum_LUSC=c(which(colData(data_lusc)$definition!="Solid Tissue Normal"))
+Tum_COAD=c(which(colData(data_coad)$definition!="Solid Tissue Normal"))
+Tum_BRCA=c(which(colData(data_brca)$definition!="Solid Tissue Normal"))
+```
+
+
+
+```{r}
+mafonction_choisie=Ma_fonction_MEAN3SD
+
+#On calcule la moyenen d'expression pour chaque gène dans les éch normaux + 3SD
+ 
+Mean_CT_LUAD=apply(data_luad_scale[index_CT_luad, Norm_LUAD], 1, mafonction_choisie)
+
+ 
+Mean_CT_CRC=apply(data_coad_scale[index_CT_coad,Norm_COAD], 1,mafonction_choisie )
+
+ 
+Mean_CT_LUSC=apply(data_lusc_scale[index_CT_lusc,Norm_LUSC], 1,mafonction_choisie )
+
+ 
+Mean_CT_BRCA=apply(data_brca_scale[index_CT_breast,Norm_BRCA], 1,mafonction_choisie )
+head(Mean_CT_BRCA)
+
+#Et pour tous
+Mean_LUAD=apply(data_luad_scale[,Norm_LUAD], 1,mafonction_choisie )
+                   
+Mean_LUSC=apply(data_lusc_scale[,Norm_LUSC], 1,mafonction_choisie )
+Mean_COAD=apply(data_coad_scale[,Norm_COAD], 1,mafonction_choisie )
+Mean_BRCA=apply(data_brca_scale[,Norm_BRCA], 1,mafonction_choisie )
+head(Mean_BRCA)
+```
+
+```{r}
+#On créé notre super fonction
+ExpBin=function(Mat_init, 
+                Mean) {
+ifelse(Mat_init > Mean, 1, 0)
+}
+#On teste la super fonction sur la première ligne, 
+#on va bien de 2 à A pour avoir toutes les colonnes numériques
+
+
+#On l'applique pour construire EE_CT
+EE_CT_LUAD=ExpBin(data_luad_scale[index_CT_luad,],Mean_CT_LUAD )
+
+EE_CT_LUSC=ExpBin(data_lusc_scale[index_CT_lusc,],Mean_CT_LUSC )
+
+
+EE_CT_COAD=ExpBin(data_coad_scale[index_CT_coad,],Mean_CT_CRC )
+
+EE_CT_BRCA=ExpBin(data_brca_scale[index_CT_breast,],Mean_CT_BRCA )
+
+EE_CT_total=cbind(EE_CT_LUAD, EE_CT_LUSC, EE_CT_COAD, EE_CT_BRCA)
+
+length(which(EE_CT_BRCA==1))/(dim(EE_CT_BRCA)[1]*dim(EE_CT_BRCA)[2])*100
+```
+
+
+#SPM
+
+##Générique
+
+
+Initialisation
+```{r}
+
+Name_project = "BRCA"
+
+Spm = c("N_ON", "N_OFF","Mean_ON", "Mean_OFF",
+              "T-test_ON_OFF","T-test_zero","SPM")
+
+Tum = Tum_BRCA
+
+EE = EE_CT_BRCA # Tablaux binaire
+
+data = assay(data_brca, 2)*10^6 #Données normalisées continues
+
+
+```
+
+Boucle sur les id génériques : on fait ca pour chaque projet, avec l'init et la fin ad hoc
+```{r}
+n_tot = length(Tum) #Nombre d'éch
+
+gene_test = as.character(CT_uniq$Description)
+
+for (i in seq_along(gene_test)) {
+  
+#on trouve le gène dans la liste  
+ind = grep(paste(gene_test[i], "[^[:alnum:]]", sep=""), rownames(EE))[1]
+ind_counts = grep(paste(gene_test[i], "[^[:alnum:]]", sep=""), rownames(data))[1]
+
+#on trouve les tumeurs ON / OFF
+id_ON =  intersect(Tum, which(EE[ind,]==1))
+id_OFF = intersect(Tum, which(EE[ind,]==0))
+
+#on calcule les moyennes à titre de comparaison : les moyennes sont calculées lors du t-test
+
+#Effectif s de chaque groupe
+n_ON = length(id_ON)
+n_OFF = length(id_OFF)
+
+#t-test de comparaison s'il y a lieu : on veut que les valeurs ON soient assez différentes de OFF
+if (is.na(ind_counts)==F & n_ON>=3) {
+  T_nouveau_ONOFF = t.test(data[ind_counts,id_ON], 
+                  data[ind_counts,id_OFF])
+} else {#Dans ce cas on doit calculer les moyennes séparément
+  Nouveau_mean_ON = Ma_fonction_mean(data[ind_counts,id_ON] )
+  Nouveau_mean_OFF = Ma_fonction_mean(data[ind_counts,id_OFF])
+  
+  T_nouveau_ONOFF=data.frame(p.value = c(NA),
+                             estimate=c(Nouveau_mean_ON, Nouveau_mean_OFF))
+  }
+
+
+#t-test de comparaison s'il y a lieu : on veut que les valeurs ON soient assez différentes de 0
+if (is.na(ind_counts)==F & n_ON>=3) {
+  T_nouveau_zero = t.test(data[ind_counts,id_ON], 
+                  rep(0, n_tot))
+} else {T_nouveau_zero=data.frame(p.value = c(NA))}
+
+
+#on calcule le SPM ON vs All
+Nouveau_spm = sum((data[ind_counts,id_ON])^2) /
+    sum((data[ind_counts, Tum])^2)
+
+#On sauve tout dans le tableau
+Spm = cbind(Spm, 
+                       data.frame(c(n_ON, n_OFF,  
+                                    T_nouveau_ONOFF$estimate[1],T_nouveau_ONOFF$estimate[2],
+                                    T_nouveau_ONOFF$p.value[1], 
+                                    T_nouveau_zero$p.value,
+                                    Nouveau_spm)))
+colnames(Spm)[i+1] = gene_test[i]
+
+}
+
+#On nomme les lignes selon les valeurs implémentées en intro
+rownames(Spm) = Spm[,1]
+#Puis on peut retirer la première colonne (titre)
+Spm = Spm[,-1]
+
+Spm = t(Spm)
+Spm = data.frame(Spm)
+
+#on range les lignes par ordre alphabétique
+Spm = Spm[order(rownames(Spm)),]
+
+
+hist(Spm$SPM, 100)
+```
+
+
+Fin : ATTENTION CHANGER LE NOM DE LA VARIABLE DE STOCKAGE !!!
+```{r}
+Spm_BRCA = Spm
+
+```
+
+Ecrire les tables
+
+```{r}
+subset(Spm, Spm$SPM > 0.999 & Spm$T.test_zero <=0.01 & Spm$Mean_ON >=1& Spm$Mean_OFF < 1)
+```
+
+
+```{r}
+write.table(subset(Spm, Spm$SPM > 0.999), 
+            paste(pathRes, "/Liste_Spm_0_999_", Name_project, ".txt", sep=""), 
+            sep = "\t", quote = FALSE,  row.names = T)
+
+
+
+write.table(subset(Spm, Spm$SPM > 0.999 & Spm$T.test_zero <=0.01 & Spm$Mean_ON >=1), 
+            paste(pathRes, "/Liste_Spm_0_999_", Name_project, "_Zero_1.txt", sep=""), 
+            sep = "\t", quote = FALSE,  row.names = T)
+
+write.table(subset(Spm, Spm$SPM > 0.999 & Spm$T.test_zero <=0.01 & Spm$Mean_ON >=1 & Spm$Mean_OFF < 1), 
+            paste(pathRes, "/Liste_Spm_0_999_", Name_project, "_Zero_1_Inf.txt", sep=""), 
+            sep = "\t", quote = FALSE,  row.names = T)
+```
+
+```{r}
+data = data.frame(vec = c(Spm$Mean_ON,
+                          Spm$Mean_OFF),
+                  type = c(rep("ON", length(Spm$Mean_ON)),
+                           rep("OFF", length(Spm$Mean_OFF))),
+                  grp = rep(c(1:length(Spm$Mean_ON)), 2)) 
+
+g1 = ggplot(data = data,
+       aes(x= type, y = log10(1+vec), color = type, group = grp) ) +
+  geom_line(color= "black", alpha = 0.5)+
+    geom_jitter( alpha=0.5, size=3, width = 0.01)+
+    scale_y_continuous(limits = c(0, log10(1+max(Spm$Mean_ON, na.rm = T))+1))+
+
+  scale_color_manual(values = c("red4","green4"))+
+  labs(title="All", y="Log10 Mean",x=" ",cex=14)+
+  theme_classic()+ 
+ theme(plot.title = element_text(face = "bold", hjust = 0.5, size = 12) ,
+              text=element_text(),
+              axis.title = element_text(face="bold"),
+              axis.text.x=element_text(angle=45, hjust=1,colour="black", size = 12),
+              axis.text.y=element_text(colour="black", size = 12),
+      legend.position="none")
+
+#########
+data = data.frame(vec = c(subset(Spm, Spm$SPM > 0.999)$Mean_ON,
+                          subset(Spm, Spm$SPM > 0.999)$Mean_OFF),
+                  type = c(rep("ON", length(subset(Spm, Spm$SPM > 0.999)$Mean_ON)),
+                           rep("OFF", length(subset(Spm, Spm$SPM > 0.999)$Mean_OFF))),
+                  grp = rep(c(1:length(subset(Spm, Spm$SPM > 0.999)$Mean_ON)), 2)) 
+
+g2 = ggplot(data = data,
+       aes(x= type, y = log10(1+vec), color = type, group = grp) ) +
+  geom_line(color= "black", alpha = 0.5)+
+    geom_jitter( alpha=0.5, size=3, width = 0.01)+
+    scale_y_continuous(limits = c(0, log10(1+max(Spm$Mean_ON, na.rm = T))+1))+
+  scale_color_manual(values = c("red4","green4"))+
+  labs(title="SPM > 0.999", y="Log10 Mean",x=" ",cex=14)+
+  theme_classic()+ 
+ theme(plot.title = element_text(face = "bold", hjust = 0.5, size = 12) ,
+              text=element_text(),
+              axis.title = element_text(face="bold"),
+              axis.text.x=element_text(angle=45, hjust=1,colour="black", size = 12),
+              axis.text.y=element_text(colour="black", size = 12),
+       legend.position="none")
+
+###
+
+
+data = data.frame(vec = c(subset(Spm, Spm$SPM > 0.999 & 
+                                   Spm$T.test_zero <=0.01 & 
+                                   Spm$Mean_ON >=1& 
+                                               Spm$Mean_OFF < 1)$Mean_ON,
+                          subset(Spm, Spm$SPM > 0.999 & 
+                                   Spm$T.test_zero <=0.01 & 
+                                   Spm$Mean_ON >=1& 
+                                               Spm$Mean_OFF < 1)$Mean_OFF),
+                  type = c(rep("ON", 
+                               length(subset(Spm, Spm$SPM > 0.999 &
+                                               Spm$T.test_zero <=0.01 & 
+                                               Spm$Mean_ON >=1 & 
+                                               Spm$Mean_OFF < 1)$Mean_ON)),
+                           rep("OFF", 
+                               length(subset(Spm, Spm$SPM > 0.999 &
+                                               Spm$T.test_zero <=0.01 &
+                                               Spm$Mean_ON >=1& 
+                                               Spm$Mean_OFF < 1)$Mean_OFF))),
+                  grp = rep(c(1:length(subset(Spm, Spm$SPM > 0.999 & Spm$T.test_zero <=0.01 & Spm$Mean_ON >=1& 
+                                               Spm$Mean_OFF < 1)$Mean_ON)), 2)) 
+
+g3 = ggplot(data = data,
+       aes(x= type, y = log10(1+vec), color = type, group = grp) ) +
+  geom_line(color= "black", alpha = 0.5)+
+  geom_jitter( alpha=0.5, size=3, width = 0.01)+
+    scale_y_continuous(limits = c(0, log10(1+max(Spm$Mean_ON, na.rm = T))+1))+
+  scale_color_manual(values = c("red4","green4"))+
+  labs(title="SPM > 0.999 & p <0.01", y="Log10 Mean",x=" ",cex=14)+
+  theme_classic()+ 
+ theme(plot.title = element_text(face = "bold", hjust = 0.5, size = 12) ,
+              text=element_text(),
+              axis.title = element_text(face="bold"),
+              axis.text.x=element_text(angle=45, hjust=1,colour="black", size = 12),
+              axis.text.y=element_text(colour="black", size = 12),
+      legend.position="none")
+
+
+#list de ggplot
+gs <- list(g1, g2,g3)
+
+#Layout
+hlay <- rbind(c(1,2, 3),
+              c(1,2, 3))
+select_grobs <- function(lay) {
+  id <- unique(c(t(lay))) 
+  id[!is.na(id)]
+} 
+
+grid.arrange(grobs=gs[select_grobs(hlay)], layout_matrix=hlay)
+```
+
+
+```{r}
+Spm = Spm_COAD
+COAD <- subset(Spm, Spm$SPM > 0.999 & Spm$T.test_zero <=0.01 & 
+                 Spm$Mean_ON >=1 & Spm$Mean_OFF < 1)
+Spm = Spm_LUAD
+LUAD <- subset(Spm, Spm$SPM > 0.999 & Spm$T.test_zero <=0.01 & 
+                 Spm$Mean_ON >=1 & Spm$Mean_OFF < 1)
+Spm = Spm_BRCA
+BRCA <- subset(Spm, Spm$SPM > 0.999 & Spm$T.test_zero <=0.01 & 
+                 Spm$Mean_ON >=1 & Spm$Mean_OFF < 1)
+Spm = Spm_LUSC
+LUSC <- subset(Spm, Spm$SPM > 0.999 & Spm$T.test_zero <=0.01 & 
+                 Spm$Mean_ON >=1 & Spm$Mean_OFF < 1)
+
+library(VennDiagram)
+#Utiliser le premier diagram pour calculer automatiquement les intersections (celui ci est non prop)
+draw.quad.venn(area1=length(rownames(COAD)), area2 = length(rownames(LUAD)),
+               area3=length(rownames(LUSC)),area4 = length(rownames(BRCA)),
+               
+                n12=length(intersect(rownames(COAD), rownames(LUAD))),
+               n23=length(intersect(rownames(LUAD),rownames(LUSC))),
+               n13=length(intersect(rownames(COAD), rownames(LUSC))),
+               n14=length(intersect(rownames(COAD), rownames(BRCA))),
+               n24=length(intersect(rownames(LUAD), rownames(BRCA))),
+               n34=length(intersect(rownames(LUSC), rownames(BRCA))),
+               
+              n123=length(intersect(intersect(rownames(COAD), rownames(LUAD)),
+                                     rownames(LUSC))),
+              n124=length(intersect(intersect(rownames(COAD), rownames(LUAD)),
+                                     rownames(BRCA))),
+               n134=length(intersect(intersect(rownames(COAD), rownames(LUSC)),
+                                     rownames(BRCA))), 
+              n234=length(intersect(intersect(rownames(BRCA), rownames(LUAD)),
+                                     rownames(LUSC))),
+               
+               n1234=length(intersect(intersect(rownames(COAD), rownames(LUAD)),
+                                    intersect(rownames(LUSC), rownames(BRCA)))),
+                 category = c("COAD" , "LUAD " , "LUSC", "BRCA")
+                # rotation = 1, 
+              #reverse = FALSE, euler.d =TRUE, scaled = TRUE, 
+              #lwd = rep(2, 4), lty =rep("solid", 4), 
+              #col = rep("black", 4), fill = c("green", "cyan", "blue", "purple"),
+             #    alpha= rep(0.5, 4), label.col = rep("black", 11), 
+             #    cex = rep(0.5, 11)
+             )
+              
+#Reprendre les valeurs dans le deuxième
+library(eulerr)
+# Input in the form of a named numeric vector
+fit1 <- euler(c("COAD" = 8, "LUSC" = 42, "LUAD" = 19, "BRCA"=23,
+                 "COAD&LUSC" = 4, "COAD&LUAD" = 0, "COAD&BRCA"=0,
+                "LUSC&LUAD"=31, "LUSC&BRCA"=7, "LUAD&BRCA"=7,
+                 "COAD&LUSC&LUAD" = 5, "COAD&LUSC&BRCA"=1,
+                "COAD&LUAD&BRCA"=0, "LUAD&LUSC&BRCA"=27,
+                "COAD&LUAD&LUSC&BRCA"=11))
+plot(fit1, quantities=T,
+     fill = c("green4", "navy", "cyan3", "hotpink3"),
+     lty=1:4,
+     labels=list(font=4))
+```
+
+
+
+
+
