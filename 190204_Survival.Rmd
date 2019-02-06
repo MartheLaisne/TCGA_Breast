@@ -1,0 +1,172 @@
+---
+title: "R Notebook"
+output: html_notebook
+---
+
+Ce notebook décrit commment dessiner les données de survie à partir du statut Hormad1 + / - 
+
+
+
+```{r}
+	#Pratique quand tu travailles sur des gros fichiers
+#Ex : regrouper des SummExp de différents organes / Projet TCGA
+#Entre ici la liste des fichiers que tu souhaites garder dans ton environnement
+KEEP=c('EE_CT_BRCA','EE_elected_CT','Exp_elected_CT',
+                            'Subtype','IHC_statut' ,'colData_joint')
+rm(list= ls()[!(ls() %in% KEEP )])
+
+
+```
+
+Survie données
+```{r}
+years_to_death=(colData_joint$gdc_cases.diagnoses.days_to_death)/(365)
+years_to_last_follow_up=colData_joint$gdc_cases.diagnoses.days_to_last_follow_up/(365)
+New_tumor_event=(colData_joint$cgc_case_new_tumor_event_after_initial_treatment)
+library(survival)
+library(survminer)
+head(data.frame(years_to_death, years_to_last_follow_up, New_tumor_event))
+```
+```{r}
+#survie gloable : le premier évenement est la mort
+Suivi_Mort=years_to_last_follow_up
+Suivi_Mort[which(is.na(years_to_death)==FALSE)]=years_to_death[which(is.na(years_to_death)==FALSE)]
+status_mort=rep(NA, length(years_to_death))
+status_mort[which(is.na(years_to_death)==TRUE)]=0
+status_mort[which(is.na(years_to_death)==FALSE)]=1
+#survie sans progression : le premier évenement est la mort ou la rechute
+Suivi_progression=years_to_last_follow_up
+#on prend la date du dernier suivi, et si pas d'info on prend la date de la mort (généralement c'est exclusif)
+Suivi_progression[which(is.na(years_to_last_follow_up)==TRUE)]=years_to_death[which(is.na(years_to_last_follow_up)==TRUE)]
+status_recidive=rep(NA, length(New_tumor_event))
+status_recidive[which(is.na(New_tumor_event)==TRUE)]=0
+status_recidive[which(is.na(New_tumor_event)==FALSE)]=1 #on met des 1 si la personne rechute
+status_recidive[which(is.na(years_to_death)==FALSE)]=1 #et des 1 si la personne récidive
+
+head(cbind(Suivi_progression, status_recidive, Suivi_Mort, status_mort),10)
+```
+
+KM univariés
+```{r}
+gene_int = "HORMAD1"
+
+Quant = data.frame(Exp_elected_CT[which(rownames(Exp_elected_CT) == gene_int),])
+colnames(Quant) = "QUant"
+
+Quant = Quant %>% mutate(Strat = ifelse(Quant$QUant > quantile(Quant$QUant, 0.9), "high", 
+                                        ifelse(Quant$QUant <= quantile(Quant$QUant, 0.9), "low", "int")))
+
+mydata=data.frame(time=Suivi_progression[which(colData_joint$gdc_cases.samples.sample_type!="Solid Tissue Normal")],
+                  status=status_recidive[which(colData_joint$gdc_cases.samples.sample_type!="Solid Tissue Normal")],
+                  Decile=EE_elected_CT[which(rownames(EE_elected_CT) == gene_int),
+                                which(colData_joint$gdc_cases.samples.sample_type!="Solid Tissue Normal") ])
+
+mydata=data.frame(time=Suivi_progression[which(Subtype %in% c("Basal") & 
+                                                 colData_joint$gdc_cases.samples.sample_type!="Solid Tissue Normal")],
+                  status=status_recidive[which(Subtype %in% c("Basal") &
+                                                 colData_joint$gdc_cases.samples.sample_type!="Solid Tissue Normal")],
+                  Decile=Quant$Strat[which(Subtype %in% c("Basal") &
+                                        colData_joint$gdc_cases.samples.sample_type!="Solid Tissue Normal") ])
+# List of ggsurvplots
+splots <- list()
+fit_recid=survfit(Surv(time,status)~Decile,data=mydata)
+splots[[1]] <- ggsurvplot(fit_recid, data = mydata,
+   legend = "bottom",
+   legend.title = "BREAST",
+  # legend.labs = c("High",
+   #                "Low",
+    #              "Normal-like+" ),
+   palette = c("black",
+              "hotpink3",
+               "darkcyan",
+              "goldenrod3"),
+   font.x = c(10),
+   font.y = c(10),
+   main=paste("Survie sans récidive", gene_int),
+   pval = TRUE,
+              risk.table = TRUE,   surv.median.line=c("v"),
+              tables.y.text = FALSE,
+              ggtheme = theme_classic())
+
+
+#2e plot = survie globale
+mydata2=data.frame(time=Suivi_Mort[which(colData_joint$gdc_cases.samples.sample_type!="Solid Tissue Normal")],
+                  status=status_mort[which(colData_joint$gdc_cases.samples.sample_type!="Solid Tissue Normal")],
+                  Decile=EE_elected_CT[which(rownames(EE_elected_CT) == gene_int),
+                                which(colData_joint$gdc_cases.samples.sample_type!="Solid Tissue Normal") ])
+
+mydata2=data.frame(time=Suivi_Mort[which(colData_joint$gdc_cases.samples.sample_type!="Solid Tissue Normal" &
+                                           Subtype %in% c("Basal") )],
+                  status=status_mort[which(colData_joint$gdc_cases.samples.sample_type!="Solid Tissue Normal" &
+                                             Subtype %in% c("Basal") )],
+                  Decile=Quant$Strat[which(colData_joint$gdc_cases.samples.sample_type!="Solid Tissue Normal" &
+                                        Subtype %in% c("Basal") ) ])
+
+
+fit_mort=survfit(Surv(time,status)~Decile,data=mydata2)
+splots[[2]] <- ggsurvplot(fit_mort, data = mydata2,
+   legend = "bottom",
+   legend.title = "BREAST",
+  # legend.labs = c("High",
+   #                "Low",
+    #              "Normal-like+" ),
+   palette = c("black",
+              "hotpink3",
+               "darkcyan",
+              "goldenrod3"),
+   font.x = c(10),
+   font.y = c(10),
+   main=paste("Survie globale", gene_int),
+   pval = TRUE,
+              risk.table = TRUE,   surv.median.line=c("v"),
+              tables.y.text = FALSE,
+              ggtheme = theme_classic())
+  
+# Arrange multiple ggsurvplots and print the output
+arrange_ggsurvplots(splots, print = TRUE, paste(gene_int),
+  ncol = 2, nrow = 1, risk.table.height = 0.3)
+```
+```{r}
+gene_int = "CXorf61"
+
+mydata=data.frame(time=Suivi_progression[which(colData_joint$gdc_cases.samples.sample_type!="Solid Tissue Normal")],
+                  status=status_recidive[which(colData_joint$gdc_cases.samples.sample_type!="Solid Tissue Normal")],
+                  Decile=Subtype[ which(colData_joint$gdc_cases.samples.sample_type!="Solid Tissue Normal") ])
+# List of ggsurvplots
+splots <- list()
+fit_recid=survfit(Surv(time,status)~Decile,data=mydata)
+splots[[1]] <- ggsurvplot(fit_recid, data = mydata,
+   legend = "bottom",
+   legend.title = "BRCA",
+
+   font.x = c(10),
+   font.y = c(10),
+   main=paste("Survie sans récidive", "PAM50"),
+   pval = TRUE,
+              risk.table = TRUE,   surv.median.line=c("v"),
+              tables.y.text = FALSE,
+              ggtheme = theme_classic())
+
+
+#2e plot = survie globale
+mydata2=data.frame(time=Suivi_Mort[which(colData_joint$gdc_cases.samples.sample_type!="Solid Tissue Normal")],
+                  status=status_mort[which(colData_joint$gdc_cases.samples.sample_type!="Solid Tissue Normal")],
+                  Decile=Subtype[ which(colData_joint$gdc_cases.samples.sample_type!="Solid Tissue Normal") ])
+fit_mort=survfit(Surv(time,status)~Decile,data=mydata2)
+splots[[2]] <- ggsurvplot(fit_mort, data = mydata2,
+   legend = "bottom",
+   legend.title = "BRCA",
+
+   font.x = c(10),
+   font.y = c(10),
+   main=paste("Survie globale", "PAM50"),
+   pval = TRUE,
+              risk.table = TRUE,   surv.median.line=c("v"),
+              tables.y.text = FALSE,
+              ggtheme = theme_classic())
+  
+# Arrange multiple ggsurvplots and print the output
+arrange_ggsurvplots(splots, print = TRUE, paste("PAM50"),
+  ncol = 2, nrow = 1, risk.table.height = 0.5)
+```
+

@@ -1,0 +1,96 @@
+---
+title: "R Notebook"
+output: html_notebook
+---
+
+#Intro
+
+##Data
+```{r}
+load("C:/Users/marth/Desktop/These_Marthe/1_Bioinfo/181115_TCGApostSeminaire/Results_MethylationHORMAD1/190110_MethExp_BRCA_Hormad.RData")
+```
+
+##Librairies
+
+```{r}
+library(FactoMineR)
+library(factoextra)
+
+```
+
+Add a new chunk by clicking the *Insert Chunk* button on the toolbar or by pressing *Ctrl+Alt+I*.
+
+When you save the notebook, an HTML file containing the code and output will be saved alongside it (click the *Preview* button or press *Ctrl+Shift+K* to preview the HTML file).
+
+The preview shows you a rendered HTML copy of the contents of the editor. Consequently, unlike *Knit*, *Preview* does not run any R code chunks. Instead, the output of the chunk when it was last run in the editor is displayed.
+```{r}
+id <- which(is.element(rowData(data_brca)$gene_id , c(rownames(Selected_CT), "CT83"))==TRUE)
+data.active <- data.frame(t(assay(data_brca[id,], 2)), 
+                          subtype_BRCA_Subtype_PAM50 = colData(data_brca)$subtype_BRCA_Subtype_PAM50,
+                          subtype_pathologic_stage = colData(data_brca)$subtype_pathologic_stage, 
+                          shortLetterCode = colData(data_brca)$shortLetterCode)
+
+colnames(data.active)[1 : length(id)] = make.names(rowData(data_brca)$gene_id [id], unique = TRUE)
+
+data.active[, 1 : length(id)] = log2(1+ data.active[, 1 : length(id)] * 10^6)
+
+data.active$subtype_BRCA_Subtype_PAM50 = as.character(data.active$subtype_BRCA_Subtype_PAM50)
+data.active$subtype_BRCA_Subtype_PAM50[which(data.active$shortLetterCode=="NT")] = "NT"
+data.active$subtype_BRCA_Subtype_PAM50 = as.factor(data.active$subtype_BRCA_Subtype_PAM50)
+
+res.pca <- PCA(data.active, scale.unit = FALSE, ncp = 5, graph = TRUE,
+               quali.sup = c(88, 87, 89))
+```
+
+
+```{r}
+fviz_eig(res.pca, addlabels = TRUE, ylim = c(0, 50))
+
+```
+
+```{r}
+library("corrplot")
+corrplot(var$cos2, is.corr=FALSE)
+```
+
+```{r}
+fviz_contrib(res.pca, choice = "var", axes = 1:2, fill = "grey",
+  color = "black", top = 20)+
+  labs(title= "Contribution of variables to Dim 1-2 ", 
+       y="Constributions (%)",x="",cex=10)+
+  theme_classic()+ 
+ theme(plot.title = element_text(size = 14, face = "bold",hjust = 0.5),
+              text=element_text(),
+              axis.title = element_text(face="bold"),
+              axis.text.x=element_text(angle=45, hjust=1,colour="black", size = 11),
+              axis.text.y=element_text(colour="black", size = 11))
+```
+
+
+
+```{r}
+fviz_pca_var(res.pca, col.var = "cos2", axes = c(1,2),
+             gradient.cols = c("#00AFBB", "#E7B800", "#FC4E07"),
+              select.var = list(name = NULL, cos2 = 0.3, contrib = NULL),
+             repel = TRUE # Évite le chevauchement de texte
+             )
+```
+
+
+
+```{r}
+name <- list (name = c("HORMAD1", "CT83", "C1orf94", "TRIM43", "C4orf51", "C4orf40", "XAGE2", 
+                      "MAGEA6", "MAGEA3", "MAGEA2", "CSAG1", "MAGEA12", "XAGE1D", "GAGE12J", "ZIC5", "CSAG2",
+                      "DMRTC2", "PLAC1"))
+
+fviz_pca_biplot (res.pca, col.ind = "black", col.var = "black",
+              fill.ind = data.active$subtype_BRCA_Subtype_PAM50,
+              select.var = name, repel = TRUE,
+              geom.ind  = c("point"), geom.var = c("arrow", "text"),
+              pointsize = "cos2",  palette = "jco", pointshape = 21
+             ) +
+ scale_fill_manual(values=c("hotpink4","darkcyan","goldenrod3", "orange3", "grey50", "white"))
+```
+
+
+
